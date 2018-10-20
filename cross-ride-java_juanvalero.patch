@@ -1,0 +1,3297 @@
+diff --git a/build.gradle b/build.gradle
+index 2d73af5..ed8b83f 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -1,6 +1,6 @@
+ buildscript {
+ 	ext {
+-		springBootVersion = '2.0.2.RELEASE'
++		springBootVersion = '2.0.5.RELEASE'
+ 	}
+ 	repositories {
+ 		mavenCentral()
+@@ -30,15 +30,20 @@
+ }
+ 
+ dependencies {
++ 	compile('org.springframework.boot:spring-boot-starter-security')
+     compile('org.springframework.boot:spring-boot-starter')
+ 	compile('org.springframework.boot:spring-boot-starter-data-jpa')
+ 	compile('org.springframework.boot:spring-boot-starter-web')
+ 	compile('org.springframework.boot:spring-boot-starter-data-rest')
+ 	compile('com.fasterxml.jackson.datatype:jackson-datatype-jsr310')
+ 	compile('org.liquibase:liquibase-core')
++	compile('io.jsonwebtoken:jjwt:0.9.0')
++	compile('org.modelmapper.extensions:modelmapper-spring:2.3.0')
++	compile('com.fasterxml.jackson.datatype:jackson-datatype-jsr310')
+ 	runtime('org.springframework.boot:spring-boot-devtools')
+ 	runtime('mysql:mysql-connector-java')
+ 	testCompile('com.h2database:h2')
++	testCompile('org.springframework.security:spring-security-test')
+ 	testCompile('org.springframework.boot:spring-boot-starter-aop')
+ 	testCompile('org.springframework.boot:spring-boot-starter-test')
+ 	testCompile('org.mockito:mockito-core:2.7.22')
+diff --git a/gradlew b/gradlew
+old mode 100755
+new mode 100644
+diff --git a/src/main/java/com/crossover/techtrial/CrossRideApplication.java b/src/main/java/com/crossover/techtrial/CrossRideApplication.java
+index e619ea0..18342d5 100644
+--- a/src/main/java/com/crossover/techtrial/CrossRideApplication.java
++++ b/src/main/java/com/crossover/techtrial/CrossRideApplication.java
+@@ -9,7 +9,7 @@
+  */
+ @SpringBootApplication
+ public class CrossRideApplication {
+-  public static void main(String[] args) {
+-    SpringApplication.run(CrossRideApplication.class, args);
+-  }
++	public static void main(String[] args) {
++		SpringApplication.run(CrossRideApplication.class, args);
++	}
+ }
+diff --git a/src/main/java/com/crossover/techtrial/config/SecurityConfig.java b/src/main/java/com/crossover/techtrial/config/SecurityConfig.java
+new file mode 100644
+index 0000000..a9d8174
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/config/SecurityConfig.java
+@@ -0,0 +1,65 @@
++package com.crossover.techtrial.config;
++
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++import org.springframework.security.authentication.AuthenticationManager;
++import org.springframework.security.config.BeanIds;
++import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
++import org.springframework.security.config.annotation.method.configuration.EnableGlobalMethodSecurity;
++import org.springframework.security.config.annotation.web.builders.HttpSecurity;
++import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
++import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
++import org.springframework.security.config.http.SessionCreationPolicy;
++import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
++
++import com.crossover.techtrial.security.JwtAccessDeniedHandler;
++import com.crossover.techtrial.security.JwtAuthenticationEntryPoint;
++import com.crossover.techtrial.security.JwtAuthenticationFilter;
++import com.crossover.techtrial.security.PersonDetailService;
++
++@Configuration
++@EnableWebSecurity
++@EnableGlobalMethodSecurity(securedEnabled = true, jsr250Enabled = true, prePostEnabled = true)
++public class SecurityConfig extends WebSecurityConfigurerAdapter {
++
++	@Autowired
++	PersonDetailService personService;
++
++	@Autowired
++	private JwtAuthenticationEntryPoint unauthorizedHandler;
++
++	@Autowired
++	private JwtAuthenticationFilter jwtAuthenticationFilter;
++
++	@Autowired
++	private JwtAccessDeniedHandler jwtAccessDenier;
++
++	@Override
++	public void configure(AuthenticationManagerBuilder authenticationManagerBuilder) throws Exception {
++		authenticationManagerBuilder.userDetailsService(personService).passwordEncoder(passwordEncoder());
++	}
++
++	@Bean(BeanIds.AUTHENTICATION_MANAGER)
++	@Override
++	public AuthenticationManager authenticationManagerBean() throws Exception {
++		return super.authenticationManagerBean();
++	}
++
++	@Bean
++	public PasswordEncoder passwordEncoder() {
++		return new BCryptPasswordEncoder();
++	}
++
++	@Override
++	protected void configure(HttpSecurity http) throws Exception {
++
++		http.cors().and().sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS).and()
++				.exceptionHandling().authenticationEntryPoint(unauthorizedHandler).accessDeniedHandler(jwtAccessDenier)
++				.and().csrf().disable();
++		http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
++
++	}
++}
+\ No newline at end of file
+diff --git a/src/main/java/com/crossover/techtrial/controller/AuthController.java b/src/main/java/com/crossover/techtrial/controller/AuthController.java
+new file mode 100644
+index 0000000..896d38c
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/controller/AuthController.java
+@@ -0,0 +1,47 @@
++package com.crossover.techtrial.controller;
++
++import javax.validation.Valid;
++
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.http.ResponseEntity;
++import org.springframework.security.authentication.AuthenticationManager;
++import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
++import org.springframework.security.core.Authentication;
++import org.springframework.security.core.context.SecurityContextHolder;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.RequestBody;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RestController;
++
++import com.crossover.techtrial.model.request.LoginModel;
++import com.crossover.techtrial.security.JwtAuthenticationResponse;
++import com.crossover.techtrial.security.JwtTokenProvider;
++import com.crossover.techtrial.service.PersonService;
++
++@RestController
++@RequestMapping("/api/auth")
++public class AuthController {
++
++	@Autowired
++	AuthenticationManager authenticationManager;
++
++	@Autowired
++	PersonService personService;
++
++	@Autowired
++	PasswordEncoder passwordEncoder;
++
++	@Autowired
++	JwtTokenProvider tokenProvider;
++
++	@PostMapping("/signin")
++	public ResponseEntity<JwtAuthenticationResponse> authenticateUser(@Valid @RequestBody LoginModel loginRequest) {
++		Authentication authentication = authenticationManager.authenticate(
++				new UsernamePasswordAuthenticationToken(loginRequest.getEmail(), loginRequest.getPassword()));
++		SecurityContextHolder.getContext().setAuthentication(authentication);
++		String jwt = tokenProvider.generateToken(authentication);
++		return ResponseEntity.ok(new JwtAuthenticationResponse(jwt));
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/controller/PersonController.java b/src/main/java/com/crossover/techtrial/controller/PersonController.java
+index ded9199..ab471ba 100644
+--- a/src/main/java/com/crossover/techtrial/controller/PersonController.java
++++ b/src/main/java/com/crossover/techtrial/controller/PersonController.java
+@@ -1,17 +1,20 @@
+-/**
+- * 
+- */
+ package com.crossover.techtrial.controller;
+ 
+ import java.util.List;
++
+ import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.http.HttpStatus;
+ import org.springframework.http.ResponseEntity;
++import org.springframework.security.access.prepost.PreAuthorize;
++import org.springframework.util.MimeTypeUtils;
+ import org.springframework.web.bind.annotation.GetMapping;
+ import org.springframework.web.bind.annotation.PathVariable;
+ import org.springframework.web.bind.annotation.PostMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+ import org.springframework.web.bind.annotation.RestController;
++
+ import com.crossover.techtrial.model.Person;
++import com.crossover.techtrial.model.request.SignUpRequest;
+ import com.crossover.techtrial.service.PersonService;
+ 
+ /**
+@@ -21,27 +24,31 @@
+ 
+ @RestController
+ public class PersonController {
+-  
+-  @Autowired
+-  PersonService personService;
+-  
+-  @PostMapping(path = "/api/person")
+-  public ResponseEntity<Person> register(@RequestBody Person p) {
+-    return ResponseEntity.ok(personService.save(p));
+-  }
+-  
+-  @GetMapping(path = "/api/person")
+-  public ResponseEntity<List<Person>> getAllPersons() {
+-    return ResponseEntity.ok(personService.getAll());
+-  }
+-  
+-  @GetMapping(path = "/api/person/{perso-id}")
+-  public ResponseEntity<Person> getPersonById(@PathVariable(name="person-id", required=true)Long personId) {
+-    Person person = personService.findById(personId);
+-    if (person != null) {
+-      return ResponseEntity.ok(person);
+-    }
+-    return ResponseEntity.notFound().build();
+-  }
+-  
++
++	@Autowired
++	PersonService personService;
++
++	@PostMapping(path = "/api/person", produces = MimeTypeUtils.APPLICATION_JSON_VALUE)
++	@PreAuthorize("permitAll")
++	public ResponseEntity<Person> register(@RequestBody SignUpRequest sigUpPerson) {
++		Person person= personService.save(sigUpPerson);
++		return ResponseEntity.status(HttpStatus.CREATED).body(person);
++	}
++
++	@GetMapping(path = "/api/person")
++	@PreAuthorize("hasRole('ROLE_ADMIN')")
++	public ResponseEntity<List<Person>> getAllPersons() {
++		return ResponseEntity.ok(personService.getAll());
++	}
++
++	@GetMapping(path = "/api/person/{person-id}")
++	@PreAuthorize("isAuthenticated()")
++	public ResponseEntity<Person> getPersonById(@PathVariable(name = "person-id", required = true ) final Long personId) {
++		Person person = personService.findById(personId);
++		if (person != null) {
++			return ResponseEntity.ok(person);
++		}
++		return ResponseEntity.notFound().build();
++	}
++
+ }
+diff --git a/src/main/java/com/crossover/techtrial/controller/RideController.java b/src/main/java/com/crossover/techtrial/controller/RideController.java
+index baea0d8..ca7b2f2 100644
+--- a/src/main/java/com/crossover/techtrial/controller/RideController.java
++++ b/src/main/java/com/crossover/techtrial/controller/RideController.java
+@@ -6,64 +6,70 @@
+ import java.time.LocalDateTime;
+ import java.util.ArrayList;
+ import java.util.List;
++
+ import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.format.annotation.DateTimeFormat;
++import org.springframework.http.HttpStatus;
+ import org.springframework.http.ResponseEntity;
++import org.springframework.security.access.prepost.PreAuthorize;
+ import org.springframework.web.bind.annotation.GetMapping;
+ import org.springframework.web.bind.annotation.PathVariable;
+ import org.springframework.web.bind.annotation.PostMapping;
+ import org.springframework.web.bind.annotation.RequestBody;
+ import org.springframework.web.bind.annotation.RequestParam;
+ import org.springframework.web.bind.annotation.RestController;
++
+ import com.crossover.techtrial.dto.TopDriverDTO;
+ import com.crossover.techtrial.model.Ride;
++import com.crossover.techtrial.model.request.RideModel;
+ import com.crossover.techtrial.service.RideService;
+ 
+ /**
+  * RideController for Ride related APIs.
++ * 
+  * @author crossover
+  *
+  */
+ @RestController
+ public class RideController {
+-  
+-  @Autowired
+-  RideService rideService;
+ 
+-  @PostMapping(path ="/api/ride")
+-  public ResponseEntity<Ride> createNewRide(@RequestBody Ride ride) {
+-    return ResponseEntity.ok(rideService.save(ride));
+-  }
+-  
+-  @GetMapping(path = "/api/ride/{ride-id}")
+-  public ResponseEntity<Ride> getRideById(@PathVariable(name="ride-id",required=true)Long rideId){
+-    Ride ride = rideService.findById(rideId);
+-    if (ride!=null)
+-      return ResponseEntity.ok(ride);
+-    return ResponseEntity.notFound().build();
+-  }
+-  
+-  /**
+-   * This API returns the top 5 drivers with their email,name, total minutes, maximum ride duration in minutes.
+-   * Only rides that starts and ends within the mentioned durations should be counted.
+-   * Any rides where either start or endtime is outside the search, should not be considered.
+-   * 
+-   * DONT CHANGE METHOD SIGNATURE AND RETURN TYPES
+-   * @return
+-   */
+-  @GetMapping(path = "/api/top-rides")
+-  public ResponseEntity<List<TopDriverDTO>> getTopDriver(
+-      @RequestParam(value="max", defaultValue="5") Long count,
+-      @RequestParam(value="startTime", required=true) @DateTimeFormat(pattern="yyyy-MM-dd'T'HH:mm:ss") LocalDateTime startTime,
+-      @RequestParam(value="endTime", required=true) @DateTimeFormat(pattern="yyyy-MM-dd'T'HH:mm:ss") LocalDateTime endTime){
+-    List<TopDriverDTO> topDrivers = new ArrayList<TopDriverDTO>();
+-    /**
+-     * Your Implementation Here. And Fill up topDrivers Arraylist with Top
+-     * 
+-     */
+-    
+-    return ResponseEntity.ok(topDrivers);
+-    
+-  }
+-  
++	@Autowired
++	RideService rideService;
++
++	@PostMapping(path = "/api/ride")
++	@PreAuthorize("isAuthenticated()")
++	public ResponseEntity<Ride> createNewRide(@RequestBody RideModel ride) {
++		return ResponseEntity.status(HttpStatus.CREATED).body(rideService.save(ride));
++	}
++
++	@GetMapping(path = "/api/ride/{ride-id}")
++	@PreAuthorize("hasRole('ROLE_ADMIN')")
++	public ResponseEntity<Ride> getRideById(@PathVariable(name = "ride-id", required = true) Long rideId) {
++		Ride ride = rideService.findById(rideId);
++		if (ride != null)
++			return ResponseEntity.ok(ride);
++		return ResponseEntity.notFound().build();
++	}
++
++	/**
++	 * This API returns the top 5 drivers with their email,name, total minutes,
++	 * maximum ride duration in minutes. Only rides that starts and ends within the
++	 * mentioned durations should be counted. Any rides where either start or
++	 * endtime is outside the search, should not be considered.
++	 * 
++	 * DONT CHANGE METHOD SIGNATURE AND RETURN TYPES
++	 * 
++	 * @return
++	 */
++	@GetMapping(path = "/api/top-rides")
++	@PreAuthorize("isAuthenticated()")
++	public ResponseEntity<List<TopDriverDTO>> getTopDriver(@RequestParam(value = "max", defaultValue = "5") Long count,
++			@RequestParam(value = "startTime", required = true) @DateTimeFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss") LocalDateTime startTime,
++			@RequestParam(value = "endTime", required = true) @DateTimeFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss") LocalDateTime endTime) {
++		List<TopDriverDTO> topDrivers = new ArrayList<TopDriverDTO>();
++		topDrivers.addAll(rideService.getTopDrivers(startTime, endTime, count.intValue()));
++		return ResponseEntity.ok(topDrivers);
++
++	}
++
+ }
+diff --git a/src/main/java/com/crossover/techtrial/dto/ExceptionDTO.java b/src/main/java/com/crossover/techtrial/dto/ExceptionDTO.java
+new file mode 100644
+index 0000000..e91d199
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/dto/ExceptionDTO.java
+@@ -0,0 +1,59 @@
++package com.crossover.techtrial.dto;
++
++import com.fasterxml.jackson.annotation.JsonCreator;
++import com.fasterxml.jackson.annotation.JsonProperty;
++
++/**
++ * The Class ExceptionDTO. exception DTO for generic exception message
++ */
++public class ExceptionDTO {
++
++	private final String resource;
++
++	private final Object value;
++
++	private final String message;
++
++	/**
++	 * Instantiates a new exception DTO.
++	 *
++	 * @param resource the resource
++	 * @param value    the value
++	 * @param message  the message
++	 */
++	@JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
++	public ExceptionDTO(@JsonProperty("resource") String resource, @JsonProperty("value") Object value,
++			@JsonProperty("message") String message) {
++		this.resource = resource;
++		this.value = value;
++		this.message = message;
++	}
++
++	/**
++	 * Gets the resource.
++	 *
++	 * @return the resource
++	 */
++	public String getResource() {
++		return resource;
++	}
++
++	/**
++	 * Gets the value.
++	 *
++	 * @return the value
++	 */
++	public Object getValue() {
++		return value;
++	}
++
++	/**
++	 * Gets the message.
++	 *
++	 * @return the message
++	 */
++	public String getMessage() {
++		return message;
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java b/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java
+index 9a807ea..d5cc688 100644
+--- a/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java
++++ b/src/main/java/com/crossover/techtrial/dto/TopDriverDTO.java
+@@ -8,82 +8,78 @@
+  *
+  */
+ public class TopDriverDTO {
+-  
+-  /**
+-   * Constructor for TopDriverDTO
+-   * @param name
+-   * @param email
+-   * @param totalRideDurationInSeconds
+-   * @param maxRideDurationInSecods
+-   * @param averageDistance
+-   */
+-  public TopDriverDTO(String name, 
+-      String email, 
+-      Long totalRideDurationInSeconds,
+-      Long maxRideDurationInSecods,
+-      Double averageDistance) {
+-    this.setName(name);
+-    this.setEmail(email);
+-    this.setAverageDistance(averageDistance);
+-    this.setMaxRideDurationInSecods(maxRideDurationInSecods);
+-    this.setTotalRideDurationInSeconds(totalRideDurationInSeconds);
+-    
+-  }
+-  
+-  public TopDriverDTO() {
+-    
+-  }
+-  
+-  private String name;
+-  
+-  private String email;
+-  
+-  private Long totalRideDurationInSeconds;
+-  
+-  private Long maxRideDurationInSecods;
+-  
+-  private Double averageDistance;
+ 
+-  public String getName() {
+-    return name;
+-  }
++	private String name;
+ 
+-  public void setName(String name) {
+-    this.name = name;
+-  }
++	private String email;
+ 
+-  public String getEmail() {
+-    return email;
+-  }
++	private Long totalRideDurationInSeconds;
+ 
+-  public void setEmail(String email) {
+-    this.email = email;
+-  }
++	private Long maxRideDurationInSecods;
+ 
+-  public Long getTotalRideDurationInSeconds() {
+-    return totalRideDurationInSeconds;
+-  }
++	private Double averageDistance;
+ 
+-  public void setTotalRideDurationInSeconds(Long totalRideDurationInSeconds) {
+-    this.totalRideDurationInSeconds = totalRideDurationInSeconds;
+-  }
++	/**
++	 * Constructor for TopDriverDTO
++	 * 
++	 * @param name
++	 * @param email
++	 * @param totalRideDurationInSeconds
++	 * @param maxRideDurationInSecods
++	 * @param averageDistance
++	 */
++	public TopDriverDTO(String name, String email, Long totalRideDurationInSeconds, Long maxRideDurationInSecods,
++			Double averageDistance) {
++		this.setName(name);
++		this.setEmail(email);
++		this.setAverageDistance(averageDistance);
++		this.setMaxRideDurationInSecods(maxRideDurationInSecods);
++		this.setTotalRideDurationInSeconds(totalRideDurationInSeconds);
+ 
+-  public Long getMaxRideDurationInSecods() {
+-    return maxRideDurationInSecods;
+-  }
++	}
+ 
+-  public void setMaxRideDurationInSecods(Long maxRideDurationInSecods) {
+-    this.maxRideDurationInSecods = maxRideDurationInSecods;
+-  }
++	public TopDriverDTO() {
+ 
+-  public Double getAverageDistance() {
+-    return averageDistance;
+-  }
++	}
+ 
+-  public void setAverageDistance(Double averageDistance) {
+-    this.averageDistance = averageDistance;
+-  }
+-  
+-  
+-    
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public String getEmail() {
++		return email;
++	}
++
++	public void setEmail(String email) {
++		this.email = email;
++	}
++
++	public Long getTotalRideDurationInSeconds() {
++		return totalRideDurationInSeconds;
++	}
++
++	public void setTotalRideDurationInSeconds(Long totalRideDurationInSeconds) {
++		this.totalRideDurationInSeconds = totalRideDurationInSeconds;
++	}
++
++	public Long getMaxRideDurationInSecods() {
++		return maxRideDurationInSecods;
++	}
++
++	public void setMaxRideDurationInSecods(Long maxRideDurationInSecods) {
++		this.maxRideDurationInSecods = maxRideDurationInSecods;
++	}
++
++	public Double getAverageDistance() {
++		return averageDistance;
++	}
++
++	public void setAverageDistance(Double averageDistance) {
++		this.averageDistance = averageDistance;
++	}
++
+ }
+diff --git a/src/main/java/com/crossover/techtrial/exceptions/GlobalExceptionHandler.java b/src/main/java/com/crossover/techtrial/exceptions/GlobalExceptionHandler.java
+index e39127a..c221580 100644
+--- a/src/main/java/com/crossover/techtrial/exceptions/GlobalExceptionHandler.java
++++ b/src/main/java/com/crossover/techtrial/exceptions/GlobalExceptionHandler.java
+@@ -1,29 +1,83 @@
+ package com.crossover.techtrial.exceptions;
+ 
+-import java.util.AbstractMap;
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
++import java.time.format.DateTimeParseException;
++import java.util.List;
++import java.util.stream.Collectors;
++
++import org.hibernate.exception.ConstraintViolationException;
+ import org.springframework.http.HttpStatus;
+ import org.springframework.http.ResponseEntity;
++import org.springframework.security.authentication.InternalAuthenticationServiceException;
+ import org.springframework.stereotype.Component;
++import org.springframework.web.bind.MethodArgumentNotValidException;
+ import org.springframework.web.bind.annotation.ControllerAdvice;
+ import org.springframework.web.bind.annotation.ExceptionHandler;
++import org.springframework.web.bind.annotation.ResponseBody;
++
++import com.crossover.techtrial.dto.ExceptionDTO;
++
++import io.jsonwebtoken.JwtException;
+ 
+ @ControllerAdvice
+ @Component
+ public class GlobalExceptionHandler {
+ 
+-  private static final Logger LOG = LoggerFactory.getLogger(GlobalExceptionHandler.class);
++	@ExceptionHandler
++	public ResponseEntity<ExceptionDTO> handle(Exception exception) {
++		exception.printStackTrace();
++		ExceptionDTO details = new ExceptionDTO("unexpected Exception", null, exception.getMessage());
++		return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(details);
++	}
+ 
+-  /**
+-   * Global Exception handler for all exceptions.
+-   */
+-  @ExceptionHandler
+-  public ResponseEntity<AbstractMap.SimpleEntry<String, String>> handle(Exception exception) {
+-    // general exception
+-    LOG.error("Exception: Unable to process this request. ", exception);
+-    AbstractMap.SimpleEntry<String, String> response =
+-        new AbstractMap.SimpleEntry<>("message", "Unable to process this request.");
+-    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+-  }
++	@ExceptionHandler({ ModelValidationException.class })
++	public @ResponseBody ResponseEntity<List<ExceptionDTO>> handleModelValidationException(
++			ModelValidationException exception) {
++		List<ExceptionDTO> details = exception.getErrors().getAllErrors().stream()
++				.map(f -> new ExceptionDTO(f.getObjectName(), f.getCode(), f.getDefaultMessage()))
++				.collect(Collectors.toList());
++		return ResponseEntity.status(exception.getCode()).body(details);
++	}
++
++	@ExceptionHandler({ ConstraintViolationException.class })
++	public @ResponseBody ResponseEntity<ExceptionDTO> handleConstraintViolationException(
++			ConstraintViolationException exception) {
++		ExceptionDTO details = new ExceptionDTO(exception.getConstraintName(), exception.getSQLException().getMessage(),
++				exception.getMessage());
++		return ResponseEntity.status(HttpStatus.CONFLICT).body(details);
++	}
++
++	@ExceptionHandler({ MethodArgumentNotValidException.class })
++	public @ResponseBody ResponseEntity<ExceptionDTO> handleMethodArgumentNotValidException(
++			ConstraintViolationException exception) {
++		ExceptionDTO details = new ExceptionDTO(exception.getConstraintName(), exception.getSQLException().getMessage(),
++				exception.getMessage());
++		return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(details);
++	}
++
++	@ExceptionHandler({ PersonException.class })
++	public @ResponseBody ResponseEntity<ExceptionDTO> handlePersonException(PersonException exception) {
++		ExceptionDTO details = new ExceptionDTO(exception.getResource(), exception.getValue(), exception.getMessage());
++		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(details);
++	}
++
++	@ExceptionHandler({ InternalAuthenticationServiceException.class })
++	public @ResponseBody ResponseEntity<ExceptionDTO> handleInternalAuthenticationServiceException(
++			InternalAuthenticationServiceException exception) {
++		ExceptionDTO details = new ExceptionDTO("user not found or not problem with authentication", null,
++				exception.getMessage());
++		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(details);
++	}
++
++	@ExceptionHandler({ DateTimeParseException.class })
++	public @ResponseBody ResponseEntity<ExceptionDTO> handleDateTimeParseException(DateTimeParseException exception) {
++		ExceptionDTO details = new ExceptionDTO("Bad formated or empty,  please check your date format is yyyy-MM-dd'T'HH:mm:ss", null,
++				exception.getMessage());
++		return ResponseEntity.status(HttpStatus.BAD_REQUEST ).body(details);
++	}
++
++	@ExceptionHandler({ JwtException.class })
++	public @ResponseBody ResponseEntity<ExceptionDTO> handleJwtException(JwtException exception) {
++		ExceptionDTO details = new ExceptionDTO("token", null, exception.getMessage());
++		return ResponseEntity.status(HttpStatus.FORBIDDEN).body(details);
++	}
+ }
+diff --git a/src/main/java/com/crossover/techtrial/exceptions/ModelValidationException.java b/src/main/java/com/crossover/techtrial/exceptions/ModelValidationException.java
+new file mode 100644
+index 0000000..f58a16c
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/exceptions/ModelValidationException.java
+@@ -0,0 +1,24 @@
++package com.crossover.techtrial.exceptions;
++
++import org.springframework.http.HttpStatus;
++import org.springframework.validation.Errors;
++
++public class ModelValidationException extends RuntimeException {
++
++	private static final long serialVersionUID = -4154808747502535931L;
++	private final int code = HttpStatus.BAD_REQUEST.value();
++	private Errors errors;
++
++	public ModelValidationException(String message, Errors errors) {
++		super(message);
++		this.errors = errors;
++	}
++
++	public int getCode() {
++		return code;
++	}
++
++	public Errors getErrors() {
++		return errors;
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/exceptions/PersonException.java b/src/main/java/com/crossover/techtrial/exceptions/PersonException.java
+new file mode 100644
+index 0000000..317a119
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/exceptions/PersonException.java
+@@ -0,0 +1,41 @@
++package com.crossover.techtrial.exceptions;
++
++public class PersonException extends RuntimeException {
++
++	private static final long serialVersionUID = 8068038995824487474L;
++
++	private String value;
++	private String resource;
++	private String exceptionCause;
++
++	public PersonException(String value, String resource, String exceptionCause) {
++		super(exceptionCause);
++		this.value = value;
++		this.resource = resource;
++	}
++
++	public String getValue() {
++		return value;
++	}
++
++	public void setValue(String value) {
++		this.value = value;
++	}
++
++	public String getResource() {
++		return resource;
++	}
++
++	public void setResource(String resource) {
++		this.resource = resource;
++	}
++
++	public String getExceptionCause() {
++		return exceptionCause;
++	}
++
++	public void setExceptionCause(String exceptionCause) {
++		this.exceptionCause = exceptionCause;
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/exceptions/RideException.java b/src/main/java/com/crossover/techtrial/exceptions/RideException.java
+new file mode 100644
+index 0000000..55b86bd
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/exceptions/RideException.java
+@@ -0,0 +1,11 @@
++package com.crossover.techtrial.exceptions;
++
++public class RideException extends RuntimeException {
++
++	private static final long serialVersionUID = -7894815146430215626L;
++
++	public RideException(String message) {
++		super(message);
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/model/Person.java b/src/main/java/com/crossover/techtrial/model/Person.java
+index 04d44f3..6cc9fa2 100644
+--- a/src/main/java/com/crossover/techtrial/model/Person.java
++++ b/src/main/java/com/crossover/techtrial/model/Person.java
+@@ -1,127 +1,85 @@
+-/**
+- * 
+- */
+ package com.crossover.techtrial.model;
+ 
+ import java.io.Serializable;
++import java.util.HashSet;
++import java.util.Set;
++
+ import javax.persistence.Column;
+ import javax.persistence.Entity;
++import javax.persistence.FetchType;
+ import javax.persistence.GeneratedValue;
+ import javax.persistence.GenerationType;
+ import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.JoinTable;
++import javax.persistence.ManyToMany;
+ import javax.persistence.Table;
+-import javax.validation.constraints.Email;
+-import javax.validation.constraints.NotNull;
+ 
++import com.fasterxml.jackson.annotation.JsonIgnore;
+ 
+-/**
+- * @author crossover
+- *
+- */
+ @Entity
+ @Table(name = "person")
+-public class Person implements Serializable{
++public class Person implements Serializable {
+ 
+-  private static final long serialVersionUID = 7401548380514451401L;
+-  
+-  public Person() {}
+- 
+-  @Id
+-  @GeneratedValue(strategy = GenerationType.IDENTITY)
+-  Long id;
++	private static final long serialVersionUID = 7401548380514451401L;
+ 
+-  @Column(name = "name")
+-  String name;
++	@Id
++	@GeneratedValue(strategy = GenerationType.IDENTITY)
++	private Long id;
+ 
+-  @NotNull
+-  @Email
+-  @Column(name = "email")
+-  String email;
++	@Column(name = "name")
++	private String name;
+ 
+-  @Column(name = "registration_number")
+-  String registrationNumber;
++	@Column(name = "email", nullable = false, unique = true)
++	private String email;
+ 
+-  public Long getId() {
+-    return id;
+-  }
++	@JsonIgnore
++	@Column(name = "registration_number", nullable = false)
++	private String registrationNumber;
+ 
+-  public void setId(Long id) {
+-    this.id = id;
+-  }
++	@JsonIgnore
++	@ManyToMany(fetch = FetchType.LAZY)
++	@JoinTable(name = "person_role", joinColumns = @JoinColumn(name = "person_id"), inverseJoinColumns = @JoinColumn(name = "role_id"))
++	private Set<Role> roles = new HashSet<>();
+ 
+-  public String getName() {
+-    return name;
+-  }
++	public Long getId() {
++		return id;
++	}
+ 
+-  public void setName(String name) {
+-    this.name = name;
+-  }
++	public void setId(Long id) {
++		this.id = id;
++	}
+ 
+-  public String getEmail() {
+-    return email;
+-  }
++	public String getName() {
++		return name;
++	}
+ 
+-  public void setEmail(String email) {
+-    this.email = email;
+-  }
++	public void setName(String name) {
++		this.name = name;
++	}
+ 
+-  public String getRegistrationNumber() {
+-    return registrationNumber;
+-  }
++	public String getEmail() {
++		return email;
++	}
+ 
+-  public void setRegistrationNumber(String registrationNumber) {
+-    this.registrationNumber = registrationNumber;
+-  }
++	public void setEmail(String email) {
++		this.email = email;
++	}
+ 
+-  @Override
+-  public int hashCode() {
+-    final int prime = 31;
+-    int result = 1;
+-    result = prime * result + ((email == null) ? 0 : email.hashCode());
+-    result = prime * result + ((id == null) ? 0 : id.hashCode());
+-    result = prime * result + ((name == null) ? 0 : name.hashCode());
+-    result = prime * result + ((registrationNumber == null) ? 0 : registrationNumber.hashCode());
+-    return result;
+-  }
++	public String getRegistrationNumber() {
++		return registrationNumber;
++	}
+ 
+-  @Override
+-  public boolean equals(Object obj) {
+-    if (this == obj)
+-      return true;
+-    if (obj == null)
+-      return false;
+-    if (getClass() != obj.getClass())
+-      return false;
+-    Person other = (Person) obj;
+-    if (email == null) {
+-      if (other.email != null)
+-        return false;
+-    } else if (!email.equals(other.email))
+-      return false;
+-    if (id == null) {
+-      if (other.id != null)
+-        return false;
+-    } else if (!id.equals(other.id))
+-      return false;
+-    if (name == null) {
+-      if (other.name != null)
+-        return false;
+-    } else if (!name.equals(other.name))
+-      return false;
+-    if (registrationNumber == null) {
+-      if (other.registrationNumber != null)
+-        return false;
+-    } else if (!registrationNumber.equals(other.registrationNumber))
+-      return false;
+-    return true;
+-  }
++	public void setRegistrationNumber(String registrationNumber) {
++		this.registrationNumber = registrationNumber;
++	}
+ 
+-  @Override
+-  public String toString() {
+-    return "Person [id=" + id + ", name=" + name + ", email=" + email + ", registrationNumber=" + registrationNumber + "]";
+-  }
+-  
+-  
++	public Set<Role> getRoles() {
++		return roles;
++	}
+ 
++	public void setRoles(Set<Role> roles) {
++		this.roles = roles;
++	}
+ 
+ }
+diff --git a/src/main/java/com/crossover/techtrial/model/Ride.java b/src/main/java/com/crossover/techtrial/model/Ride.java
+index 1740eea..10f8824 100644
+--- a/src/main/java/com/crossover/techtrial/model/Ride.java
++++ b/src/main/java/com/crossover/techtrial/model/Ride.java
+@@ -1,158 +1,133 @@
+-/**
+- * 
+- */
+ package com.crossover.techtrial.model;
+ 
+ import java.io.Serializable;
++
+ import javax.persistence.Column;
++import javax.persistence.ColumnResult;
++import javax.persistence.ConstructorResult;
+ import javax.persistence.Entity;
+ import javax.persistence.GeneratedValue;
+ import javax.persistence.GenerationType;
+ import javax.persistence.Id;
+ import javax.persistence.JoinColumn;
+ import javax.persistence.ManyToOne;
++import javax.persistence.NamedNativeQuery;
++import javax.persistence.SqlResultSetMapping;
+ import javax.persistence.Table;
+-import javax.validation.constraints.NotNull;
++
++import com.crossover.techtrial.dto.TopDriverDTO;
+ 
+ @Entity
+ @Table(name = "ride")
+-public class Ride implements Serializable{
++@SqlResultSetMapping(name = "TopDrivers", classes = @ConstructorResult(targetClass = TopDriverDTO.class, columns = {
++		@ColumnResult(name = "name"), @ColumnResult(name = "email"),
++		@ColumnResult(name = "totalRideDurationInSeconds", type = Long.class),
++		@ColumnResult(name = "maxRideDurationInSecods", type = Long.class),
++		@ColumnResult(name = "averageDistance", type = Double.class) }))
++@NamedNativeQuery(name = "Ride.findTopDrivers", query = "SELECT person.name, person.email, MAX(durationSum) AS totalRideDurationInSeconds, "
++		+ "maxRideDurationInSecods, averageDistance " + "FROM ("
++		+ "SELECT driver_id, SUM(TIMESTAMPDIFF(second, start_time, end_time)) AS durationSum, "
++		+ "MAX(TIMESTAMPDIFF(second, start_time, end_time)) AS maxRideDurationInSecods, "
++		+ "AVG(distance + 0.0) AS averageDistance " + "FROM ride " + "WHERE (start_time >= ?1 AND end_time < ?2) "
++		+ "GROUP BY driver_id" + ") AS subRide " + "INNER JOIN person ON driver_id = person.id " + "GROUP BY driver_id "
++		+ "ORDER BY MAX(durationSum) DESC", resultSetMapping = "TopDrivers")
++public class Ride implements Serializable {
+ 
+-  private static final long serialVersionUID = 9097639215351514001L;
++	private static final long serialVersionUID = 9097639215351514001L;
+ 
+-  @Id
+-  @GeneratedValue(strategy = GenerationType.IDENTITY)
+-  Long id;
++	@Id
++	@GeneratedValue(strategy = GenerationType.IDENTITY)
++	private Long id;
+ 
+-  @NotNull
+-  @Column(name = "start_time")
+-  String startTime;
+-  
+-  @NotNull
+-  @Column(name = "end_time")
+-  String endTime;
+-  
+-  @Column(name = "distance")
+-  Long distance;
+-  
+-  @ManyToOne
+-  @JoinColumn(name = "driver_id", referencedColumnName = "id")
+-  Person driver;
+-  
+-  @ManyToOne
+-  @JoinColumn(name = "rider_id", referencedColumnName = "id")
+-  Person rider;
++	@Column(name = "start_time", nullable = false)
++	private String startTime;
+ 
+-  public Long getId() {
+-    return id;
+-  }
++	@Column(name = "end_time", nullable = false)
++	private String endTime;
+ 
+-  public void setId(Long id) {
+-    this.id = id;
+-  }
++	@Column(name = "distance")
++	private Long distance;
+ 
+-  public String getStartTime() {
+-    return startTime;
+-  }
++	@ManyToOne
++	@JoinColumn(name = "driver_id", referencedColumnName = "id")
++	private Person driver;
+ 
+-  public void setStartTime(String startTime) {
+-    this.startTime = startTime;
+-  }
++	@ManyToOne
++	@JoinColumn(name = "rider_id", referencedColumnName = "id")
++	private Person rider;
+ 
+-  public String getEndTime() {
+-    return endTime;
+-  }
++	public Long getId() {
++		return id;
++	}
+ 
+-  public void setEndTime(String endTime) {
+-    this.endTime = endTime;
+-  }
++	public void setId(Long id) {
++		this.id = id;
++	}
+ 
+-  public Long getDistance() {
+-    return distance;
+-  }
++	public String getStartTime() {
++		return startTime;
++	}
+ 
+-  public void setDistance(Long distance) {
+-    this.distance = distance;
+-  }
++	public void setStartTime(String startTime) {
++		this.startTime = startTime;
++	}
+ 
+-  public Person getDriver() {
+-    return driver;
+-  }
++	public String getEndTime() {
++		return endTime;
++	}
+ 
+-  public void setDriver(Person driver) {
+-    this.driver = driver;
+-  }
++	public void setEndTime(String endTime) {
++		this.endTime = endTime;
++	}
+ 
+-  public Person getRider() {
+-    return rider;
+-  }
++	public Long getDistance() {
++		return distance;
++	}
+ 
+-  public void setRider(Person rider) {
+-    this.rider = rider;
+-  }
+-  
+-  
++	public void setDistance(Long distance) {
++		this.distance = distance;
++	}
+ 
+-  @Override
+-  public int hashCode() {
+-    final int prime = 31;
+-    int result = 1;
+-    result = prime * result + ((distance == null) ? 0 : distance.hashCode());
+-    result = prime * result + ((driver == null) ? 0 : driver.hashCode());
+-    result = prime * result + ((endTime == null) ? 0 : endTime.hashCode());
+-    result = prime * result + ((id == null) ? 0 : id.hashCode());
+-    result = prime * result + ((rider == null) ? 0 : rider.hashCode());
+-    result = prime * result + ((startTime == null) ? 0 : startTime.hashCode());
+-    return result;
+-  }
++	public Person getDriver() {
++		return driver;
++	}
+ 
+-  @Override
+-  public boolean equals(Object obj) {
+-    if (this == obj)
+-      return true;
+-    if (obj == null)
+-      return false;
+-    if (getClass() != obj.getClass())
+-      return false;
+-    Ride other = (Ride) obj;
+-    if (distance == null) {
+-      if (other.distance != null)
+-        return false;
+-    } else if (!distance.equals(other.distance))
+-      return false;
+-    if (driver == null) {
+-      if (other.driver != null)
+-        return false;
+-    } else if (!driver.equals(other.driver))
+-      return false;
+-    if (endTime == null) {
+-      if (other.endTime != null)
+-        return false;
+-    } else if (!endTime.equals(other.endTime))
+-      return false;
+-    if (id == null) {
+-      if (other.id != null)
+-        return false;
+-    } else if (!id.equals(other.id))
+-      return false;
+-    if (rider == null) {
+-      if (other.rider != null)
+-        return false;
+-    } else if (!rider.equals(other.rider))
+-      return false;
+-    if (startTime == null) {
+-      if (other.startTime != null)
+-        return false;
+-    } else if (!startTime.equals(other.startTime))
+-      return false;
+-    return true;
+-  }
++	public void setDriver(Person driver) {
++		this.driver = driver;
++	}
+ 
+-  @Override
+-  public String toString() {
+-    return "Ride [id=" + id + ", startTime=" + startTime + ", endTime=" + endTime + ", distance=" + distance + ", driver=" + driver + ", rider=" + rider + "]";
+-  }
+-  
+-  
+-  
++	public Person getRider() {
++		return rider;
++	}
++
++	public void setRider(Person rider) {
++		this.rider = rider;
++	}
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = 1;
++		result = prime * result + ((id == null) ? 0 : id.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (obj == null)
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		Ride other = (Ride) obj;
++		if (id == null) {
++			if (other.id != null)
++				return false;
++		} else if (!id.equals(other.id))
++			return false;
++		return true;
++	}
++
++	
+ }
+diff --git a/src/main/java/com/crossover/techtrial/model/Role.java b/src/main/java/com/crossover/techtrial/model/Role.java
+new file mode 100644
+index 0000000..ad5ef05
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/model/Role.java
+@@ -0,0 +1,47 @@
++package com.crossover.techtrial.model;
++
++import java.io.Serializable;
++
++import javax.persistence.Column;
++import javax.persistence.Entity;
++import javax.persistence.EnumType;
++import javax.persistence.Enumerated;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.Table;
++
++import org.hibernate.annotations.NaturalId;
++
++@Entity
++@Table(name = "role")
++public class Role implements Serializable {
++
++	private static final long serialVersionUID = 976546937561728203L;
++
++	@Id
++	@GeneratedValue(strategy = GenerationType.IDENTITY)
++	private Long id;
++
++	@NaturalId
++	@Column(length = 24, name = "role_name")
++	@Enumerated(EnumType.STRING)
++	private RoleName roleName;
++
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public RoleName getRoleName() {
++		return roleName;
++	}
++
++	public void setRoleName(RoleName roleName) {
++		this.roleName = roleName;
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/model/RoleName.java b/src/main/java/com/crossover/techtrial/model/RoleName.java
+new file mode 100644
+index 0000000..a6e28ad
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/model/RoleName.java
+@@ -0,0 +1,16 @@
++package com.crossover.techtrial.model;
++
++public enum RoleName {
++	ROLE_ADMIN(1L), ROLE_PERSON(2L);
++
++	private transient Long id;
++
++	private RoleName(Long id) {
++		this.id = id;
++	}
++
++	public Long getId() {
++		return id;
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/model/request/LoginModel.java b/src/main/java/com/crossover/techtrial/model/request/LoginModel.java
+new file mode 100644
+index 0000000..b1c7af8
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/model/request/LoginModel.java
+@@ -0,0 +1,80 @@
++package com.crossover.techtrial.model.request;
++
++import java.util.Collection;
++
++import javax.validation.constraints.Email;
++import javax.validation.constraints.NotBlank;
++
++import org.springframework.security.core.GrantedAuthority;
++import org.springframework.security.core.userdetails.UserDetails;
++
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++
++@JsonIgnoreProperties(ignoreUnknown = true)
++public class LoginModel implements UserDetails {
++
++	private static final long serialVersionUID = -4751999370218758685L;
++
++	@NotBlank
++	@Email
++	private String email;
++
++	@NotBlank
++	private String registrationNumber;
++
++	public String getEmail() {
++		return email;
++	}
++
++	public void setEmail(String email) {
++		this.email = email;
++	}
++
++	public String getRegistrationNumber() {
++		return registrationNumber;
++	}
++
++	public void setRegistrationNumber(String registrationNumber) {
++		this.registrationNumber = registrationNumber;
++	}
++
++	@Override
++	public String toString() {
++		return "LoginModel [email=" + email + ", registrationNumber=" + registrationNumber + "]";
++	}
++
++	@Override
++	public Collection<? extends GrantedAuthority> getAuthorities() {
++		return null;
++	}
++
++	@Override
++	public String getPassword() {
++		return registrationNumber;
++	}
++
++	@Override
++	public String getUsername() {
++		return email;
++	}
++
++	@Override
++	public boolean isAccountNonExpired() {
++		return true;
++	}
++
++	@Override
++	public boolean isAccountNonLocked() {
++		return true;
++	}
++
++	@Override
++	public boolean isCredentialsNonExpired() {
++		return true;
++	}
++
++	@Override
++	public boolean isEnabled() {
++		return true;
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/model/request/RideModel.java b/src/main/java/com/crossover/techtrial/model/request/RideModel.java
+new file mode 100644
+index 0000000..1cbac50
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/model/request/RideModel.java
+@@ -0,0 +1,61 @@
++package com.crossover.techtrial.model.request;
++
++import javax.validation.constraints.Min;
++import javax.validation.constraints.NotBlank;
++import javax.validation.constraints.NotNull;
++
++import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
++
++@JsonIgnoreProperties(ignoreUnknown = true)
++public class RideModel {
++
++	@NotBlank
++	private String startTime;
++
++	@NotBlank
++	private String endTime;
++
++	@Min(value = 0)
++	private Long distance;
++
++	@NotNull
++	private Long riderId;
++
++	public String getStartTime() {
++		return startTime;
++	}
++
++	public void setStartTime(String startTime) {
++		this.startTime = startTime;
++	}
++
++	public String getEndTime() {
++		return endTime;
++	}
++
++	public void setEndTime(String endTime) {
++		this.endTime = endTime;
++	}
++
++	public Long getDistance() {
++		return distance;
++	}
++
++	public void setDistance(Long distance) {
++		this.distance = distance;
++	}
++
++	public Long getRiderId() {
++		return riderId;
++	}
++
++	public void setRiderId(Long riderId) {
++		this.riderId = riderId;
++	}
++
++	@Override
++	public String toString() {
++		return "RideModel [startTime=" + startTime + ", endTime=" + endTime + ", distance=" + distance + ", riderId="
++				+ riderId + "]";
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/model/request/SignUpRequest.java b/src/main/java/com/crossover/techtrial/model/request/SignUpRequest.java
+new file mode 100644
+index 0000000..d3910ad
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/model/request/SignUpRequest.java
+@@ -0,0 +1,45 @@
++package com.crossover.techtrial.model.request;
++
++import javax.validation.constraints.Email;
++import javax.validation.constraints.NotBlank;
++import javax.validation.constraints.Size;
++
++public class SignUpRequest {
++	@NotBlank
++	@Size(min = 4, max = 40)
++	private String name;
++
++	@NotBlank
++	@Size(max = 40)
++	@Email
++	private String email;
++
++	@NotBlank
++	@Size(min = 6, max = 20)
++	private String registrationNumber;
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public String getEmail() {
++		return email;
++	}
++
++	public void setEmail(String email) {
++		this.email = email;
++	}
++
++	public String getRegistrationNumber() {
++		return registrationNumber;
++	}
++
++	public void setRegistrationNumber(String registrationNumber) {
++		this.registrationNumber = registrationNumber;
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/repositories/PersonRepository.java b/src/main/java/com/crossover/techtrial/repositories/PersonRepository.java
+index 54b9273..e78a4cc 100644
+--- a/src/main/java/com/crossover/techtrial/repositories/PersonRepository.java
++++ b/src/main/java/com/crossover/techtrial/repositories/PersonRepository.java
+@@ -1,18 +1,34 @@
+-/**
+- * 
+- */
++
+ package com.crossover.techtrial.repositories;
+ 
+ import java.util.Optional;
++
+ import org.springframework.data.repository.PagingAndSortingRepository;
+ import org.springframework.data.rest.core.annotation.RestResource;
++
+ import com.crossover.techtrial.model.Person;
+ 
+ /**
+  * Person repository for basic operations on Person entity.
++ * 
+  * @author crossover
+  */
+-@RestResource(exported=false)
++@RestResource(exported = false)
+ public interface PersonRepository extends PagingAndSortingRepository<Person, Long> {
+-  Optional<Person> findById(Long id);
++
++	/*
++	 * (non-Javadoc)
++	 * 
++	 * @see
++	 * org.springframework.data.repository.CrudRepository#findById(java.lang.Object)
++	 */
++	Optional<Person> findById(Long id);
++
++	/**
++	 * Find person by email.
++	 *
++	 * @param email the email
++	 * @return the optional
++	 */
++	Optional<Person> findPersonByEmail(String email);
+ }
+diff --git a/src/main/java/com/crossover/techtrial/repositories/RideRepository.java b/src/main/java/com/crossover/techtrial/repositories/RideRepository.java
+index 99ace01..4ec9a48 100644
+--- a/src/main/java/com/crossover/techtrial/repositories/RideRepository.java
++++ b/src/main/java/com/crossover/techtrial/repositories/RideRepository.java
+@@ -1,17 +1,33 @@
+-/**
+- * 
+- */
+ package com.crossover.techtrial.repositories;
+ 
+-import com.crossover.techtrial.model.Ride;
++import java.time.LocalDateTime;
++import java.util.List;
++
++import org.springframework.data.domain.Pageable;
++import org.springframework.data.jpa.repository.Query;
+ import org.springframework.data.repository.CrudRepository;
+ import org.springframework.data.rest.core.annotation.RestResource;
+ 
++import com.crossover.techtrial.dto.TopDriverDTO;
++import com.crossover.techtrial.model.Ride;
++
+ /**
+- * @author crossover
++ * The Interface RideRepository.
+  *
++ * @author crossover
+  */
+ @RestResource(exported = false)
+ public interface RideRepository extends CrudRepository<Ride, Long> {
+ 
++	/**
++	 * Find top drivers.
++	 *
++	 * @param startTime the start time
++	 * @param endTime   the end time
++	 * @param pageable  the pageable
++	 * @return the list
++	 */
++	@Query(nativeQuery = true)
++	List<TopDriverDTO> findTopDrivers(LocalDateTime startTime, LocalDateTime endTime, Pageable pageable);
++
+ }
+diff --git a/src/main/java/com/crossover/techtrial/repositories/RoleRepository.java b/src/main/java/com/crossover/techtrial/repositories/RoleRepository.java
+new file mode 100644
+index 0000000..a65e934
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/repositories/RoleRepository.java
+@@ -0,0 +1,24 @@
++package com.crossover.techtrial.repositories;
++
++import java.util.Optional;
++
++import org.springframework.data.repository.CrudRepository;
++import org.springframework.data.rest.core.annotation.RestResource;
++
++import com.crossover.techtrial.model.Role;
++import com.crossover.techtrial.model.RoleName;
++
++/**
++ * The Interface RoleRepository.
++ */
++@RestResource(exported = false)
++public interface RoleRepository extends CrudRepository<Role, Long> {
++
++	/**
++	 * Find by role name.
++	 *
++	 * @param roleName the role name
++	 * @return the optional
++	 */
++	Optional<Role> findByRoleName(RoleName roleName);
++}
+diff --git a/src/main/java/com/crossover/techtrial/security/JwtAccessDeniedHandler.java b/src/main/java/com/crossover/techtrial/security/JwtAccessDeniedHandler.java
+new file mode 100644
+index 0000000..be42d53
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/security/JwtAccessDeniedHandler.java
+@@ -0,0 +1,37 @@
++package com.crossover.techtrial.security;
++
++import java.io.IOException;
++
++import javax.servlet.ServletException;
++import javax.servlet.http.HttpServletRequest;
++import javax.servlet.http.HttpServletResponse;
++
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.HttpStatus;
++import org.springframework.security.access.AccessDeniedException;
++import org.springframework.security.core.Authentication;
++import org.springframework.security.core.context.SecurityContextHolder;
++import org.springframework.security.web.access.AccessDeniedHandler;
++import org.springframework.stereotype.Component;
++import org.springframework.util.MimeTypeUtils;
++
++import com.fasterxml.jackson.databind.ObjectMapper;
++
++@Component
++public class JwtAccessDeniedHandler implements AccessDeniedHandler {
++
++	@Override
++	public void handle(HttpServletRequest request, HttpServletResponse response, AccessDeniedException exception)
++			throws IOException, ServletException {
++		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
++		String message = "You don't have permissions to access this resource";
++		if (authentication != null) {
++			message = "You are authenticated but don't have permissions to access this resource";
++		}
++
++		response.setStatus(HttpStatus.FORBIDDEN.value());
++		response.setHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*");
++		response.setContentType(MimeTypeUtils.APPLICATION_JSON_VALUE);
++		new ObjectMapper().writeValue(response.getOutputStream(), message);
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/security/JwtAuthenticationEntryPoint.java b/src/main/java/com/crossover/techtrial/security/JwtAuthenticationEntryPoint.java
+new file mode 100644
+index 0000000..e12edc2
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/security/JwtAuthenticationEntryPoint.java
+@@ -0,0 +1,28 @@
++package com.crossover.techtrial.security;
++
++import java.io.IOException;
++
++import javax.servlet.ServletException;
++import javax.servlet.http.HttpServletRequest;
++import javax.servlet.http.HttpServletResponse;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.security.core.AuthenticationException;
++import org.springframework.security.web.AuthenticationEntryPoint;
++import org.springframework.stereotype.Component;
++
++@Component
++public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
++
++	private static final Logger logger = LoggerFactory.getLogger(JwtAuthenticationEntryPoint.class);
++
++	@Override
++	public void commence(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse,
++			AuthenticationException e) throws IOException, ServletException {
++
++		logger.error("Responding with unauthorized error. Message - {}", e.getMessage());
++		httpServletResponse.sendError(HttpServletResponse.SC_UNAUTHORIZED,
++				"Sorry, You're not authorized to access this resource.");
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/security/JwtAuthenticationFilter.java b/src/main/java/com/crossover/techtrial/security/JwtAuthenticationFilter.java
+new file mode 100644
+index 0000000..0ad11a7
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/security/JwtAuthenticationFilter.java
+@@ -0,0 +1,61 @@
++package com.crossover.techtrial.security;
++
++import java.io.IOException;
++
++import javax.servlet.FilterChain;
++import javax.servlet.ServletException;
++import javax.servlet.http.HttpServletRequest;
++import javax.servlet.http.HttpServletResponse;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
++import org.springframework.security.core.context.SecurityContextHolder;
++import org.springframework.security.core.userdetails.UserDetails;
++import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
++import org.springframework.stereotype.Component;
++import org.springframework.util.StringUtils;
++import org.springframework.web.filter.OncePerRequestFilter;
++
++import com.crossover.techtrial.service.PersonService;
++
++@Component
++public class JwtAuthenticationFilter extends OncePerRequestFilter {
++
++	@Autowired
++	private JwtTokenProvider tokenProvider;
++
++	@Autowired
++	private PersonService personService;
++
++	private static final Logger logger = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
++
++	@Override
++	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
++			throws ServletException, IOException {
++		try {
++			String jwt = getJwtFromRequest(request);
++			if (StringUtils.hasText(jwt) && tokenProvider.validateToken(jwt)) {
++				String email = tokenProvider.getEmailFromJWT(jwt);
++				UserDetails userDetails = personService.loadUserByEmail(email);
++				UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
++						userDetails, null, userDetails.getAuthorities());
++				authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
++				SecurityContextHolder.getContext().setAuthentication(authentication);
++			}
++		} catch (Exception ex) {
++			logger.error("Could not set user authentication in security context", ex);
++		}
++
++		filterChain.doFilter(request, response);
++	}
++
++	private String getJwtFromRequest(HttpServletRequest request) {
++		String bearerToken = request.getHeader("Authorization");
++		if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
++			return bearerToken.substring(7, bearerToken.length());
++		}
++		return null;
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/security/JwtAuthenticationResponse.java b/src/main/java/com/crossover/techtrial/security/JwtAuthenticationResponse.java
+new file mode 100644
+index 0000000..7daad10
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/security/JwtAuthenticationResponse.java
+@@ -0,0 +1,23 @@
++package com.crossover.techtrial.security;
++
++public class JwtAuthenticationResponse {
++
++	private String accessToken;
++
++	public JwtAuthenticationResponse(String accessToken) {
++		this.accessToken = accessToken;
++	}
++
++	public JwtAuthenticationResponse() {
++		super();
++	}
++
++	public String getAccessToken() {
++		return accessToken;
++	}
++
++	public void setAccessToken(String accessToken) {
++		this.accessToken = accessToken;
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/security/JwtPersonPrincipal.java b/src/main/java/com/crossover/techtrial/security/JwtPersonPrincipal.java
+new file mode 100644
+index 0000000..8e474ef
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/security/JwtPersonPrincipal.java
+@@ -0,0 +1,98 @@
++package com.crossover.techtrial.security;
++
++import java.util.Collection;
++import java.util.List;
++import java.util.Objects;
++import java.util.stream.Collectors;
++
++import org.springframework.security.core.GrantedAuthority;
++import org.springframework.security.core.authority.SimpleGrantedAuthority;
++import org.springframework.security.core.userdetails.UserDetails;
++
++import com.crossover.techtrial.model.Person;
++
++public class JwtPersonPrincipal implements UserDetails {
++
++	private static final long serialVersionUID = -3979428238068893841L;
++	private Long id;
++	private String name;
++	private String email;
++	private String password;
++	private Collection<? extends GrantedAuthority> authorities;
++
++	public static JwtPersonPrincipal create(Person person) {
++		List<GrantedAuthority> authorities = person.getRoles().stream()
++				.map(role -> new SimpleGrantedAuthority(role.getRoleName().toString())).collect(Collectors.toList());
++		JwtPersonPrincipal principal = new JwtPersonPrincipal();
++		principal.id = person.getId();
++		principal.name = person.getName();
++		principal.email = person.getEmail();
++		principal.password = person.getRegistrationNumber();
++		principal.authorities = authorities;
++		return principal;
++	}
++
++	public Long getId() {
++		return id;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	@Override
++	public String getUsername() {
++		return email;
++	}
++
++	public String getEmail() {
++		return email;
++	}
++
++	@Override
++	public String getPassword() {
++		return password;
++	}
++
++	@Override
++	public Collection<? extends GrantedAuthority> getAuthorities() {
++		return authorities;
++	}
++
++	@Override
++	public boolean isAccountNonExpired() {
++		return true;
++	}
++
++	@Override
++	public boolean isAccountNonLocked() {
++		return true;
++	}
++
++	@Override
++	public boolean isCredentialsNonExpired() {
++		return true;
++	}
++
++	@Override
++	public boolean isEnabled() {
++		return true;
++	}
++
++	@Override
++	public boolean equals(Object person) {
++		if (this == person) {
++			return true;
++		}
++		if (person == null || getClass() != person.getClass()) {
++			return false;
++		}
++		JwtPersonPrincipal that = (JwtPersonPrincipal) person;
++		return Objects.equals(id, that.id);
++	}
++
++	@Override
++	public int hashCode() {
++		return Objects.hash(id);
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/security/JwtTokenProvider.java b/src/main/java/com/crossover/techtrial/security/JwtTokenProvider.java
+new file mode 100644
+index 0000000..b14cbe6
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/security/JwtTokenProvider.java
+@@ -0,0 +1,59 @@
++package com.crossover.techtrial.security;
++
++import java.util.Date;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.security.core.Authentication;
++import org.springframework.stereotype.Component;
++
++import io.jsonwebtoken.Claims;
++import io.jsonwebtoken.ExpiredJwtException;
++import io.jsonwebtoken.Jwts;
++import io.jsonwebtoken.MalformedJwtException;
++import io.jsonwebtoken.SignatureAlgorithm;
++import io.jsonwebtoken.UnsupportedJwtException;
++
++@Component
++public class JwtTokenProvider {
++
++	private static final Logger logger = LoggerFactory.getLogger(JwtTokenProvider.class);
++
++	@Value("${app.jwtSecret}")
++	private String jwtSecret;
++
++	@Value("${app.jwtExpirationInMs}")
++	private int jwtExpirationInMs;
++
++	public String generateToken(Authentication authentication) {
++		JwtPersonPrincipal userPrincipal = (JwtPersonPrincipal) authentication.getPrincipal();
++		Date now = new Date();
++		Date expiryDate = new Date(now.getTime() + jwtExpirationInMs);
++
++		return Jwts.builder().setSubject(userPrincipal.getUsername()).setIssuedAt(new Date()).setExpiration(expiryDate)
++				.signWith(SignatureAlgorithm.HS512, jwtSecret).compact();
++	}
++
++	public String getEmailFromJWT(String token) {
++		Claims claims = Jwts.parser().setSigningKey(jwtSecret).parseClaimsJws(token).getBody();
++
++		return claims.getSubject();
++	}
++
++	public boolean validateToken(String authToken) {
++		try {
++			Jwts.parser().setSigningKey(jwtSecret).parseClaimsJws(authToken);
++			return true;
++		} catch (MalformedJwtException ex) {
++			logger.error("Invalid JWT token");
++		} catch (ExpiredJwtException ex) {
++			logger.error("Expired JWT token");
++		} catch (UnsupportedJwtException ex) {
++			logger.error("Unsupported JWT token");
++		} catch (IllegalArgumentException ex) {
++			logger.error("JWT claims string is empty.");
++		}
++		return false;
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/security/PersonDetailService.java b/src/main/java/com/crossover/techtrial/security/PersonDetailService.java
+new file mode 100644
+index 0000000..97d5a3f
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/security/PersonDetailService.java
+@@ -0,0 +1,27 @@
++package com.crossover.techtrial.security;
++
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.security.core.userdetails.UserDetails;
++import org.springframework.security.core.userdetails.UserDetailsService;
++import org.springframework.security.core.userdetails.UsernameNotFoundException;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import com.crossover.techtrial.service.PersonService;
++
++@Service
++public class PersonDetailService implements UserDetailsService {
++
++	@Autowired
++	PersonService personService;
++
++	@Transactional
++	public UserDetails loadUserByEmail(String email) {
++		return personService.loadUserByEmail(email);
++	}
++
++	@Override
++	public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
++		return personService.loadUserByEmail(username);
++	}
++}
+\ No newline at end of file
+diff --git a/src/main/java/com/crossover/techtrial/service/PersonService.java b/src/main/java/com/crossover/techtrial/service/PersonService.java
+index 31d9a33..d1df0a5 100644
+--- a/src/main/java/com/crossover/techtrial/service/PersonService.java
++++ b/src/main/java/com/crossover/techtrial/service/PersonService.java
+@@ -1,21 +1,65 @@
+-/**
+- * 
+- */
+ package com.crossover.techtrial.service;
+ 
+ import java.util.List;
++
++import org.springframework.security.core.userdetails.UserDetails;
++
+ import com.crossover.techtrial.model.Person;
++import com.crossover.techtrial.model.request.SignUpRequest;
+ 
+ /**
+- * PersonService interface for Persons.
+- * @author cossover
++ * The Interface PersonService.
+  *
++ * @author cossover
++ * 
++ *         Service interface for objects {@link Person}
+  */
+ public interface PersonService {
+-  public List<Person> getAll();
+-  
+-  public Person save(Person p);
+-  
+-  public Person findById(Long personId);
+-  
++
++	/**
++	 * Gets the all.
++	 *
++	 * @return the all
++	 */
++	List<Person> getAll();
++
++	/**
++	 * Save.
++	 *
++	 * @param model the model
++	 * @return the person
++	 */
++	Person save(SignUpRequest model);
++
++	/**
++	 * Find by id.
++	 *
++	 * @param id the id
++	 * @return the person
++	 */
++	Person findById(Long id);
++
++	/**
++	 * Find by email.
++	 *
++	 * @param email the email
++	 * @return the person
++	 */
++	Person findByEmail(String email);
++
++	/**
++	 * Load user by email.
++	 *
++	 * @param email the email
++	 * @return the user details
++	 */
++	UserDetails loadUserByEmail(String email);
++
++	/**
++	 * Email save.
++	 *
++	 * @param email the email
++	 * @return the boolean
++	 */
++	Boolean emailSave(String email);
+ }
+diff --git a/src/main/java/com/crossover/techtrial/service/PersonServiceImpl.java b/src/main/java/com/crossover/techtrial/service/PersonServiceImpl.java
+deleted file mode 100644
+index a02f6e5..0000000
+--- a/src/main/java/com/crossover/techtrial/service/PersonServiceImpl.java
++++ /dev/null
+@@ -1,47 +0,0 @@
+-/**
+- * 
+- */
+-package com.crossover.techtrial.service;
+-
+-import java.util.ArrayList;
+-import java.util.List;
+-import java.util.Optional;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.stereotype.Service;
+-import com.crossover.techtrial.model.Person;
+-import com.crossover.techtrial.repositories.PersonRepository;
+-
+-/**
+- * @author crossover
+- *
+- */
+-@Service
+-public class PersonServiceImpl implements PersonService{
+-
+-  @Autowired
+-  PersonRepository personRepository;
+-  
+-  /* (non-Javadoc)
+-   * @see com.crossover.techtrial.service.PersonService#getAll()
+-   */
+-  @Override
+-  public List<Person> getAll() {
+-    List<Person> personList = new ArrayList<>();
+-    personRepository.findAll().forEach(personList::add);
+-    return personList;
+-    
+-  }
+-  
+-  public Person save(Person p) {
+-    return personRepository.save(p);
+-  }
+-
+-  @Override
+-  public Person findById(Long personId) {
+-    Optional<Person> dbPerson = personRepository.findById(personId);
+-    return dbPerson.orElse(null);
+-  }
+-  
+-  
+-
+-}
+diff --git a/src/main/java/com/crossover/techtrial/service/RideService.java b/src/main/java/com/crossover/techtrial/service/RideService.java
+index 4926f6b..c67c24d 100644
+--- a/src/main/java/com/crossover/techtrial/service/RideService.java
++++ b/src/main/java/com/crossover/techtrial/service/RideService.java
+@@ -1,20 +1,44 @@
+-/**
+- * 
+- */
+ package com.crossover.techtrial.service;
+ 
++import java.time.LocalDateTime;
++import java.util.List;
++
++import com.crossover.techtrial.dto.TopDriverDTO;
+ import com.crossover.techtrial.model.Ride;
++import com.crossover.techtrial.model.request.RideModel;
+ 
+ /**
+- * RideService for rides.
+- * @author crossover
++ * The Interface RideService.
+  *
++ * @author crossover
++ * 
++ *         Service interface for objects {@link Ride}
+  */
+ public interface RideService {
+-  
+-  public Ride save(Ride ride);
+-  
+-  public Ride findById(Long rideId);
+-  
+ 
++	/**
++	 * Save.
++	 *
++	 * @param model the model
++	 * @return the ride
++	 */
++	Ride save(RideModel model);
++
++	/**
++	 * Find by id.
++	 *
++	 * @param rideId the ride id
++	 * @return the ride
++	 */
++	Ride findById(Long rideId);
++
++	/**
++	 * Gets the top drivers.
++	 *
++	 * @param startTime the start time
++	 * @param endTime   the end time
++	 * @param count     the count
++	 * @return the top drivers
++	 */
++	List<TopDriverDTO> getTopDrivers(LocalDateTime startTime, LocalDateTime endTime, int count);
+ }
+diff --git a/src/main/java/com/crossover/techtrial/service/RideServiceImpl.java b/src/main/java/com/crossover/techtrial/service/RideServiceImpl.java
+deleted file mode 100644
+index 4a647cc..0000000
+--- a/src/main/java/com/crossover/techtrial/service/RideServiceImpl.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-/**
+- * 
+- */
+-package com.crossover.techtrial.service;
+-
+-import java.util.Optional;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.stereotype.Service;
+-import com.crossover.techtrial.model.Ride;
+-import com.crossover.techtrial.repositories.RideRepository;
+-
+-/**
+- * @author crossover
+- *
+- */
+-@Service
+-public class RideServiceImpl implements RideService{
+-
+-  @Autowired
+-  RideRepository rideRepository;
+-  
+-  public Ride save(Ride ride) {
+-    return rideRepository.save(ride);
+-  }
+-  
+-  public Ride findById(Long rideId) {
+-    Optional<Ride> optionalRide = rideRepository.findById(rideId);
+-    if (optionalRide.isPresent()) {
+-      return optionalRide.get();
+-    }else return null;
+-  }
+-
+-}
+diff --git a/src/main/java/com/crossover/techtrial/service/RoleService.java b/src/main/java/com/crossover/techtrial/service/RoleService.java
+new file mode 100644
+index 0000000..3b4327c
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/service/RoleService.java
+@@ -0,0 +1,18 @@
++package com.crossover.techtrial.service;
++
++import com.crossover.techtrial.model.Role;
++import com.crossover.techtrial.model.RoleName;
++
++/**
++ * The Interface RoleService.
++ */
++public interface RoleService {
++
++	/**
++	 * Find role by name.
++	 *
++	 * @param authority the authority
++	 * @return the role
++	 */
++	Role findRoleByName(RoleName authority);
++}
+diff --git a/src/main/java/com/crossover/techtrial/service/impl/PersonServiceImpl.java b/src/main/java/com/crossover/techtrial/service/impl/PersonServiceImpl.java
+new file mode 100644
+index 0000000..8bb4023
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/service/impl/PersonServiceImpl.java
+@@ -0,0 +1,76 @@
++package com.crossover.techtrial.service.impl;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.modelmapper.ModelMapper;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.security.core.userdetails.UserDetails;
++import org.springframework.security.crypto.password.PasswordEncoder;
++import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import com.crossover.techtrial.exceptions.PersonException;
++import com.crossover.techtrial.model.Person;
++import com.crossover.techtrial.model.RoleName;
++import com.crossover.techtrial.model.request.SignUpRequest;
++import com.crossover.techtrial.repositories.PersonRepository;
++import com.crossover.techtrial.security.JwtPersonPrincipal;
++import com.crossover.techtrial.service.PersonService;
++import com.crossover.techtrial.service.RoleService;;
++
++@Service
++public class PersonServiceImpl implements PersonService {
++
++	@Autowired
++	private PersonRepository personRepository;
++	@Autowired
++	private PasswordEncoder passwordEncoder;
++	@Autowired
++	private RoleService roleService;
++
++	private static ModelMapper modelMapper = new ModelMapper();
++
++	@Override
++	public List<Person> getAll() {
++		List<Person> personList = new ArrayList<>();
++		personRepository.findAll().forEach(personList::add);
++		return personList;
++	}
++
++	@Override
++	public Person save(SignUpRequest model) {
++		Person personToSingUp = modelMapper.map(model, Person.class);
++		if (emailSave(personToSingUp.getEmail())) {
++			throw new PersonException("Email is in used please use other email", "creating new User", "email in use");
++		}
++		personToSingUp.setRegistrationNumber(passwordEncoder.encode(personToSingUp.getRegistrationNumber()));
++		personToSingUp.getRoles().add(roleService.findRoleByName(RoleName.ROLE_PERSON));
++		return personRepository.save(personToSingUp);
++	}
++
++	@Override
++	public Boolean emailSave(String email) {
++		return personRepository.findPersonByEmail(email).isPresent();
++	}
++
++	@Override
++	public Person findByEmail(String email) {
++		return personRepository.findPersonByEmail(email)
++				.orElseThrow(() -> new PersonException("person by Email", email, "Person not found"));
++	}
++
++	@Transactional
++	public UserDetails loadUserByEmail(String email) {
++		Person user = personRepository.findPersonByEmail(email)
++				.orElseThrow(() -> new PersonException("User Email", email, "User not found"));
++		return JwtPersonPrincipal.create(user);
++	}
++
++	@Override
++	public Person findById(Long id) {
++		return personRepository.findById(id)
++				.orElseThrow(() -> new PersonException("person by id", id.toString(), "Person not found"));
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/service/impl/RideServiceImpl.java b/src/main/java/com/crossover/techtrial/service/impl/RideServiceImpl.java
+new file mode 100644
+index 0000000..868b3e6
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/service/impl/RideServiceImpl.java
+@@ -0,0 +1,103 @@
++package com.crossover.techtrial.service.impl;
++
++import java.time.LocalDateTime;
++import java.time.format.DateTimeFormatter;
++import java.util.List;
++import java.util.Optional;
++
++import javax.persistence.EntityManager;
++import javax.transaction.Transactional;
++
++import org.modelmapper.ModelMapper;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.data.domain.PageRequest;
++import org.springframework.security.core.Authentication;
++import org.springframework.security.core.context.SecurityContextHolder;
++import org.springframework.stereotype.Service;
++
++import com.crossover.techtrial.dto.TopDriverDTO;
++import com.crossover.techtrial.exceptions.RideException;
++import com.crossover.techtrial.model.Person;
++import com.crossover.techtrial.model.Ride;
++import com.crossover.techtrial.model.request.RideModel;
++import com.crossover.techtrial.repositories.RideRepository;
++import com.crossover.techtrial.security.JwtPersonPrincipal;
++import com.crossover.techtrial.service.RideService;
++
++@Service
++public class RideServiceImpl implements RideService {
++
++	private static final String DATETIME_PATTERN = "yyyy-MM-dd'T'HH:mm:ss";
++	private static final DateTimeFormatter DATETIME_FORMAT = DateTimeFormatter.ofPattern(DATETIME_PATTERN);
++
++	@Autowired
++	private RideRepository rideRepository;
++
++	@Autowired
++	EntityManager entityManager;
++
++	private static ModelMapper modelMapper = new ModelMapper();
++
++	@Override
++	@Transactional
++	public Ride save(RideModel model) {
++		Ride ride = rideRepository.save(getRideFromRideModel(model));
++		entityManager.refresh(ride);
++		return ride;
++	}
++
++	@Override
++	public Ride findById(Long rideId) {
++		Optional<Ride> optionalRide = rideRepository.findById(rideId);
++		return optionalRide.orElse(null);
++	}
++
++	@Override
++	public List<TopDriverDTO> getTopDrivers(LocalDateTime startTime, LocalDateTime endTime, int count) {
++		return rideRepository.findTopDrivers(startTime, endTime, PageRequest.of(0, count));
++	}
++
++	private Ride getRideFromRideModel(RideModel model) {
++
++		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
++		if (authentication == null || !authentication.isAuthenticated()) {
++			throw new RideException("This operation is available only for authenticated users");
++		}
++		Ride ride = new Ride();
++		ride.setDistance(model.getDistance());
++		ride.setStartTime(model.getStartTime());
++		ride.setEndTime(model.getEndTime());
++		ride.setDriver(new Person());
++		ride.setRider(new Person());
++		Long driverId = ((JwtPersonPrincipal) authentication.getPrincipal()).getId();
++		ride.getDriver().setId(driverId);
++		Long riderId = model.getRiderId();
++		if (riderId.equals(driverId)) {
++			throw new RideException("Rider cannot be Driver");
++		}
++		ride.getRider().setId(riderId);
++		return ride;
++	}
++
++	public boolean validateDate(RideModel model) {
++		LocalDateTime startDate = getDate(model.getStartTime());
++		LocalDateTime endDate = getDate(model.getEndTime());
++
++		if (endDate.isBefore(startDate)) {
++			return false;
++		}
++
++		return true;
++	}
++
++	/**
++	 * Gets the date. if is bad formated or empty will throw DateTimeParseException
++	 *
++	 * @param stringDate the string date
++	 * @return the date
++	 */
++	private LocalDateTime getDate(String stringDate) {
++		return LocalDateTime.parse(stringDate, DATETIME_FORMAT);
++	}
++
++}
+diff --git a/src/main/java/com/crossover/techtrial/service/impl/RoleServiceImpl.java b/src/main/java/com/crossover/techtrial/service/impl/RoleServiceImpl.java
+new file mode 100644
+index 0000000..4b51e5f
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/service/impl/RoleServiceImpl.java
+@@ -0,0 +1,28 @@
++package com.crossover.techtrial.service.impl;
++
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.stereotype.Service;
++
++import com.crossover.techtrial.model.Role;
++import com.crossover.techtrial.model.RoleName;
++import com.crossover.techtrial.repositories.RoleRepository;
++import com.crossover.techtrial.service.RoleService;
++
++/**
++ * role service
++ */
++@Service
++public class RoleServiceImpl implements RoleService {
++
++	/** The role repository. */
++	@Autowired
++	private RoleRepository roleRepository;
++
++	/*
++	 * find role by RoleName
++	 */
++	@Override
++	public Role findRoleByName(RoleName roleName) {
++		return roleRepository.findByRoleName(roleName).orElse(null);
++	}
++}
+diff --git a/src/main/java/com/crossover/techtrial/validation/ModelValidator.java b/src/main/java/com/crossover/techtrial/validation/ModelValidator.java
+new file mode 100644
+index 0000000..c487fe0
+--- /dev/null
++++ b/src/main/java/com/crossover/techtrial/validation/ModelValidator.java
+@@ -0,0 +1,28 @@
++package com.crossover.techtrial.validation;
++
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.stereotype.Component;
++import org.springframework.validation.Errors;
++import org.springframework.validation.Validator;
++import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
++import com.crossover.techtrial.exceptions.ModelValidationException;
++
++@Component
++public class ModelValidator implements Validator {
++
++	@Autowired
++	private LocalValidatorFactoryBean validator;
++
++	@Override
++	public void validate(Object model, Errors errors) {
++		validator.validate(model, errors);
++		if (errors.hasErrors()) {
++			throw new ModelValidationException("Server validator found error(s)", errors);
++		}
++	}
++
++	@Override
++	public boolean supports(Class<?> clazz) {
++		return true;
++	}
++}
+diff --git a/src/main/resources/application.properties b/src/main/resources/application.properties
+index 2e14879..7d46c37 100644
+--- a/src/main/resources/application.properties
++++ b/src/main/resources/application.properties
+@@ -1,8 +1,8 @@
+ #PLEASE TRY NOT TO CHANGE SETTINGS AND USE APPROPRIATE ENV VARIABLES and DATABASE NAME AS CONFIGURED BELOW
+ #Database connection Parameters
+ spring.datasource.url: jdbc:mysql://localhost:3306/crossride?createDatabaseIfNotExist=true&useSSL=false
+-spring.datasource.username=root
+-spring.datasource.password=
++spring.datasource.username=Juan.Valero
++spring.datasource.password=cpx5842698
+ spring.datasource.driver-class-name=com.mysql.jdbc.Driver
+ 
+ spring.jpa.hibernate.ddl-auto=none
+@@ -12,4 +12,7 @@
+ 
+ logging.level.root=INFO
+ logging.level.org.hibernate.SQL=INFO
+-logging.level.org.springframework=INFO
+\ No newline at end of file
++logging.level.org.springframework=INFO
++
++app.jwtSecret=crossridesecret
++app.jwtExpirationInMs=604800000
+\ No newline at end of file
+diff --git a/src/main/resources/db/changelog/db.changelog-1.1.xml b/src/main/resources/db/changelog/db.changelog-1.1.xml
+new file mode 100644
+index 0000000..4035529
+--- /dev/null
++++ b/src/main/resources/db/changelog/db.changelog-1.1.xml
+@@ -0,0 +1,35 @@
++<?xml version="1.1" encoding="UTF-8" standalone="no"?>
++<databaseChangeLog
++	xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
++	xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
++	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++	xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
++	<changeSet author="JuanValero" id="crosOverDB1">
++		<createTable tableName="role">
++			<column autoIncrement="true" name="id" type="BIGINT">
++				<constraints primaryKey="true" primaryKeyName="pk_role" />
++			</column>
++			<column name="role_name" type="VARCHAR(24)" />
++		</createTable>
++		<addUniqueConstraint tableName="person"
++			columnNames="email" />
++		<createTable tableName="person_role">
++			<column autoIncrement="true" name="id" type="BIGINT">
++				<constraints primaryKey="true"
++					primaryKeyName="pk_person_role" />
++			</column>
++			<column name="person_id" type="BIGINT" />
++			<column name="role_id" type="BIGINT" />
++		</createTable>
++		<addForeignKeyConstraint
++			baseColumnNames="person_id" baseTableName="person_role"
++			constraintName="fk_person_role_person" onDelete="CASCADE"
++			onUpdate="RESTRICT" referencedColumnNames="id"
++			referencedTableName="person" />
++		<addForeignKeyConstraint
++			baseColumnNames="role_id" baseTableName="person_role"
++			constraintName="fk_person_role_role" onDelete="CASCADE"
++			onUpdate="RESTRICT" referencedColumnNames="id"
++			referencedTableName="role" />
++	</changeSet>
++</databaseChangeLog>
+diff --git a/src/main/resources/db/changelog/db.changelog-data.xml b/src/main/resources/db/changelog/db.changelog-data.xml
+new file mode 100644
+index 0000000..1ec9435
+--- /dev/null
++++ b/src/main/resources/db/changelog/db.changelog-data.xml
+@@ -0,0 +1,82 @@
++<?xml version="1.1" encoding="UTF-8" standalone="no"?>
++<databaseChangeLog
++	xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
++	xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
++	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++	xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
++	<changeSet id="data_import" author="juan valero">
++		<insert tableName="role">
++			<column name="id">1</column>
++			<column name="role_name">ROLE_ADMIN</column>
++		</insert>
++		<insert tableName="role">
++			<column name="id">2</column>
++			<column name="role_name">ROLE_PERSON</column>
++		</insert>
++		<insert tableName="person">
++			<column name="id">1</column>
++			<column name="name">juan valero</column>
++			<column name="email">juanvalero252@gmail.com</column>
++			<column name="registration_number">$2a$10$Trc283E3zDvzRU7j1Co2IOccQZD7rjxuAPF0bbmJM6VH33NYtwCwm</column><!-- 001 -->
++		</insert>
++		<insert tableName="person">
++			<column name="id">2</column>
++			<column name="name">James Bond</column>
++			<column name="email">bond@mail.com</column>
++			<column name="registration_number">$2a$10$UKsQkfFqu4wevHl5HzhlX.9RzaK/1k.Ahz9akglsAPZvUxrD8zIYC</column><!-- 007 -->
++		</insert>
++
++		<insert tableName="ride">
++			<column name="id">1</column>
++			<column name="start_time">2018-10-01T09:00:00</column>
++			<column name="end_time">2018-10-01T10:00:00</column>
++			<column name="distance">50</column>
++			<column name="driver_id">1</column>
++			<column name="rider_id">2</column>
++		</insert>
++		<insert tableName="ride">
++			<column name="id">2</column>
++			<column name="start_time">2018-09-20T13:00:00</column>
++			<column name="end_time">2018-09-20T14:30:00</column>
++			<column name="distance">66</column>
++			<column name="driver_id">1</column>
++			<column name="rider_id">2</column>
++		</insert>
++		<insert tableName="ride">
++			<column name="id">3</column>
++			<column name="start_time">2018-10-11T10:00:00</column>
++			<column name="end_time">2018-10-11T14:00:00</column>
++			<column name="distance">40</column>
++			<column name="driver_id">1</column>
++			<column name="rider_id">2</column>
++		</insert>
++		<insert tableName="ride">
++			<column name="id">4</column>
++			<column name="start_time">2018-10-20T09:00:00</column>
++			<column name="end_time">2018-10-20T15:00:00</column>
++			<column name="distance">50</column>
++			<column name="driver_id">2</column>
++			<column name="rider_id">1</column>
++		</insert>
++		<insert tableName="ride">
++			<column name="id">5</column>
++			<column name="start_time">2018-09-20T07:00:00</column>
++			<column name="end_time">2018-09-21T14:00:00</column>
++			<column name="distance">84</column>
++			<column name="driver_id">2</column>
++			<column name="rider_id">1</column>
++		</insert>
++
++		<insert tableName="person_role">
++			<column name="id">2</column>
++			<column name="person_id">2</column>
++			<column name="role_id">2</column>
++		</insert>
++
++		<insert tableName="person_role">
++			<column name="id">1</column>
++			<column name="person_id">1</column>
++			<column name="role_id">1</column>
++		</insert>
++	</changeSet>
++</databaseChangeLog>
+diff --git a/src/main/resources/db/changelog/db.changelog-master.xml b/src/main/resources/db/changelog/db.changelog-master.xml
+index ea61ac5..e8a87f9 100644
+--- a/src/main/resources/db/changelog/db.changelog-master.xml
++++ b/src/main/resources/db/changelog/db.changelog-master.xml
+@@ -1,6 +1,9 @@
+-<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+-  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
++<databaseChangeLog
++	xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
++	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++	xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.4.xsd">
+-  <include file="db/changelog/db.changelog-1.0.xml"/>
++	<include file="db/changelog/db.changelog-1.0.xml" />
++	<include file="db/changelog/db.changelog-1.1.xml" />
++	<include file="db/changelog/db.changelog-data.xml" />
+ </databaseChangeLog>
+\ No newline at end of file
+diff --git a/src/test/java/com/crossover/techtrial/CrossRideApplicationTest.java b/src/test/java/com/crossover/techtrial/CrossRideApplicationTest.java
+deleted file mode 100644
+index ff6ac24..0000000
+--- a/src/test/java/com/crossover/techtrial/CrossRideApplicationTest.java
++++ /dev/null
+@@ -1,12 +0,0 @@
+-/**
+- * 
+- */
+-package com.crossover.techtrial;
+-
+-/**
+- * @author crossover
+- *
+- */
+-public class CrossRideApplicationTest {
+-
+-}
+diff --git a/src/test/java/com/crossover/techtrial/controller/AuthControllerTest.java b/src/test/java/com/crossover/techtrial/controller/AuthControllerTest.java
+new file mode 100644
+index 0000000..5a7bcfc
+--- /dev/null
++++ b/src/test/java/com/crossover/techtrial/controller/AuthControllerTest.java
+@@ -0,0 +1,83 @@
++package com.crossover.techtrial.controller;
++
++import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.core.env.Environment;
++import org.springframework.http.MediaType;
++import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.MvcResult;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++import org.springframework.web.context.WebApplicationContext;
++
++import com.crossover.techtrial.model.Person;
++import com.crossover.techtrial.repositories.PersonRepository;
++import com.crossover.techtrial.security.JwtAuthenticationResponse;
++import com.fasterxml.jackson.databind.ObjectMapper;
++
++import io.jsonwebtoken.Jwts;
++
++@RunWith(SpringJUnit4ClassRunner.class)
++@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
++public class AuthControllerTest {
++
++	private static final String URL = "/api/auth/signin";
++	private static final String EMAIL = "bond@mail.com";
++	private static final String REGISTRATION_NUMBER = "007";
++
++	private MockMvc mockMvc;
++	private ObjectMapper mapper;
++
++	@Autowired
++	private WebApplicationContext context;
++
++	@Autowired
++	private Environment environment;
++
++	@Autowired
++	private PersonRepository personRepository;
++
++	@Before
++	public void init() {
++		this.mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
++		this.mapper = new ObjectMapper();
++	}
++
++	@Test
++	public void testAuthPersonSuccess() throws Exception {
++		MvcResult result = mockMvc.perform(
++				post(URL).contentType(MediaType.APPLICATION_JSON).content(getContent(EMAIL, REGISTRATION_NUMBER)))
++				.andExpect(status().isOk()).andReturn();
++		JwtAuthenticationResponse mockedResponse = mapper.readValue(result.getResponse().getContentAsString(),
++				JwtAuthenticationResponse.class);
++		String personEmail = Jwts.parser().setSigningKey(environment.getProperty("app.jwtSecret"))
++				.parseClaimsJws(mockedResponse.getAccessToken()).getBody().getSubject();
++		Person person = personRepository.findPersonByEmail(EMAIL).orElseThrow(Exception::new);
++		Assert.assertEquals(person.getEmail(), personEmail);
++	}
++
++	@Test
++	public void testAuthPersonBadCredentials() throws Exception {
++		mockMvc.perform(
++				post(URL).contentType(MediaType.APPLICATION_JSON).content(getContent("juan@gmail.com", "randomPassword")))
++				.andExpect(status().isNotFound());
++	}
++
++	@Test
++	public void testAuthPersonInvalidCredentials() throws Exception {
++		mockMvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(getContent("noemail", "otherRandomPassword")))
++				.andExpect(status().isBadRequest());
++	}
++
++	private String getContent(String login, String password) {
++		return mapper.createObjectNode().put("email", login).put("registrationNumber", password).toString();
++	}
++}
+diff --git a/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java b/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java
+index 9ffe808..78f4367 100644
+--- a/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java
++++ b/src/test/java/com/crossover/techtrial/controller/PersonControllerTest.java
+@@ -1,26 +1,33 @@
+-/**
+- * 
+- */
+ package com.crossover.techtrial.controller;
+ 
+-import org.junit.Assert;
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++import java.util.List;
++
+ import org.junit.Before;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
+-import org.mockito.Mock;
+ import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.boot.test.context.SpringBootTest;
+ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+-import org.springframework.boot.test.web.client.TestRestTemplate;
+-import org.springframework.http.HttpEntity;
+ import org.springframework.http.HttpHeaders;
+ import org.springframework.http.MediaType;
+-import org.springframework.http.ResponseEntity;
+ import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+ import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.MvcResult;
+ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++import org.springframework.web.context.WebApplicationContext;
++
++import com.crossover.techtrial.dto.ExceptionDTO;
+ import com.crossover.techtrial.model.Person;
+-import com.crossover.techtrial.repositories.PersonRepository;
++import com.crossover.techtrial.security.JwtAuthenticationResponse;
++import com.fasterxml.jackson.databind.ObjectMapper;
+ 
+ /**
+  * @author kshah
+@@ -29,40 +36,74 @@
+ @RunWith(SpringJUnit4ClassRunner.class)
+ @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+ public class PersonControllerTest {
+-  
+-  MockMvc mockMvc;
+-  
+-  @Mock
+-  private PersonController personController;
+-  
+-  @Autowired
+-  private TestRestTemplate template;
+-  
+-  @Autowired
+-  PersonRepository personRepository;
+-  
+-  @Before
+-  public void setup() throws Exception {
+-    mockMvc = MockMvcBuilders.standaloneSetup(personController).build();
+-  }
+-  
+-  @Test
+-  public void testPanelShouldBeRegistered() throws Exception {
+-    HttpEntity<Object> person = getHttpEntity(
+-        "{\"name\": \"test 1\", \"email\": \"test10000000000001@gmail.com\"," 
+-            + " \"registrationNumber\": \"41DCT\",\"registrationDate\":\"2018-08-08T12:12:12\" }");
+-    ResponseEntity<Person> response = template.postForEntity(
+-        "/api/person", person, Person.class);
+-    //Delete this user
+-    personRepository.deleteById(response.getBody().getId());
+-    Assert.assertEquals("test 1", response.getBody().getName());
+-    Assert.assertEquals(200,response.getStatusCode().value());
+-  }
+ 
+-  private HttpEntity<Object> getHttpEntity(Object body) {
+-    HttpHeaders headers = new HttpHeaders();
+-    headers.setContentType(MediaType.APPLICATION_JSON);
+-    return new HttpEntity<Object>(body, headers);
+-  }
++	private static final String ADMIN_EMAIL = "juanvalero252@gmail.com";
++	private static final String ADMIN_REGISTRATION_NUMBER = "001";
++	private static final String EMAIL = "bond@mail.com";
++	private static final String REGISTRATION_NUMBER = "007";
+ 
++	private MockMvc mockMvc;
++	private ObjectMapper mapper;
++
++	@Autowired
++	private WebApplicationContext context;
++
++	@Before
++	public void init() {
++		this.mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
++		this.mapper = new ObjectMapper();
++	}
++
++	@Test
++	public void testPersonRegisterSuccess() throws Exception {
++		String content = mapper.createObjectNode().put("name", "jose valero").put("email", "jose.valero@mail.com")
++				.put("registrationNumber", "492727").toString();
++		MvcResult result = mockMvc.perform(post("/api/person").contentType(MediaType.APPLICATION_JSON).content(content))
++				.andExpect(status().isCreated()).andReturn();
++		Person person = mapper.readValue(result.getResponse().getContentAsByteArray(), Person.class);
++		assertEquals("jose valero", person.getName());
++	}
++
++	@Test
++	public void testGetAllPersonsSuccess() throws Exception {
++		MvcResult result = mockMvc.perform(
++				get("/api/person").header(HttpHeaders.AUTHORIZATION, getToken(ADMIN_EMAIL, ADMIN_REGISTRATION_NUMBER)))
++				.andExpect(status().isOk()).andReturn();
++		List<Person> persons = mapper.readValue(result.getResponse().getContentAsString(),
++				mapper.getTypeFactory().constructCollectionType(List.class, Person.class));
++		assertTrue(persons.size() >= 2);
++		Person admin = persons.stream().filter(person -> person.getEmail().equals(ADMIN_EMAIL)).findFirst()
++				.orElse(null);
++		assertNotNull(admin);
++	}
++
++	@Test
++	public void testGetPersonByIdSuccess() throws Exception {
++		MvcResult result = mockMvc
++				.perform(get("/api/person/2").header(HttpHeaders.AUTHORIZATION, getToken(EMAIL, REGISTRATION_NUMBER)))
++				.andExpect(status().isOk()).andReturn();
++		Person person = mapper.readValue(result.getResponse().getContentAsString(), Person.class);
++		assertEquals(EMAIL, person.getEmail());
++	}
++
++	@Test
++	public void testGetPersonByIdFail() throws Exception {
++		MvcResult result = mockMvc
++				.perform(get("/api/person/999").header(HttpHeaders.AUTHORIZATION, getToken(EMAIL, REGISTRATION_NUMBER))
++						.contentType(MediaType.APPLICATION_JSON))
++				.andExpect(status().isNotFound()).andReturn();
++		ExceptionDTO errorDetails = mapper.readValue(result.getResponse().getContentAsString(), ExceptionDTO.class);
++		assertEquals("Person not found", errorDetails.getMessage());
++	}
++
++	private String getToken(String login, String password) throws Exception {
++		String bodyResponseAuthentication = mockMvc
++				.perform(post("/api/auth/signin").contentType(MediaType.APPLICATION_JSON).content(
++						mapper.createObjectNode().put("email", login).put("registrationNumber", password).toString()))
++				.andReturn().getResponse().getContentAsString();
++		JwtAuthenticationResponse response = mapper.readValue(bodyResponseAuthentication,
++				JwtAuthenticationResponse.class);
++
++		return "Bearer " + response.getAccessToken();
++	}
+ }
+diff --git a/src/test/java/com/crossover/techtrial/controller/RideControllerTest.java b/src/test/java/com/crossover/techtrial/controller/RideControllerTest.java
+new file mode 100644
+index 0000000..724be4a
+--- /dev/null
++++ b/src/test/java/com/crossover/techtrial/controller/RideControllerTest.java
+@@ -0,0 +1,127 @@
++package com.crossover.techtrial.controller;
++
++import static org.junit.Assert.assertEquals;
++import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
++import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
++import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
++
++import java.util.List;
++
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.boot.test.context.SpringBootTest;
++import org.springframework.http.HttpHeaders;
++import org.springframework.http.MediaType;
++import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
++import org.springframework.test.web.servlet.MockMvc;
++import org.springframework.test.web.servlet.MvcResult;
++import org.springframework.test.web.servlet.setup.MockMvcBuilders;
++import org.springframework.web.context.WebApplicationContext;
++
++import com.crossover.techtrial.dto.TopDriverDTO;
++import com.crossover.techtrial.model.Ride;
++import com.crossover.techtrial.repositories.RideRepository;
++import com.crossover.techtrial.security.JwtAuthenticationResponse;
++import com.fasterxml.jackson.databind.ObjectMapper;
++
++@RunWith(SpringJUnit4ClassRunner.class)
++@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
++public class RideControllerTest {
++
++	private static final String START_TIME = "2018-09-05T08:00:00";
++	private static final String END_TIME = "2018-09-05T10:40:00";
++	private static final String EMAIL = "bond@mail.com";
++	private static final String REGISTRATION_NUMBER = "007";
++	private static final String ADMIN_EMAIL = "juanvalero252@gmail.com";
++	private static final String ADMIN_REGISTRATION_NUMBER = "001";
++
++	private MockMvc mockMvc;
++	private ObjectMapper mapper;
++
++	@Autowired
++	private WebApplicationContext context;
++
++	@Autowired
++	private RideRepository rideRepository;
++
++	@Before
++	public void init() {
++		this.mockMvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
++		this.mapper = new ObjectMapper();
++	}
++
++	@Test
++	public void testCreateNewRideSuccess() throws Exception {
++		Ride ride = addRide(START_TIME, END_TIME, 10L, 1L, EMAIL, REGISTRATION_NUMBER);
++		assertEquals(EMAIL, ride.getDriver().getEmail());
++		assertEquals(START_TIME, ride.getStartTime());
++		rideRepository.delete(ride);
++	}
++
++	@Test
++	public void testGetRideByIdSuccess() throws Exception {
++		Ride newRide = addRide(START_TIME, END_TIME, 15L, 2L, ADMIN_EMAIL, ADMIN_REGISTRATION_NUMBER);
++		MvcResult result = mockMvc
++				.perform(get("/api/ride/" + newRide.getId()).contentType(MediaType.APPLICATION_JSON)
++						.header(HttpHeaders.AUTHORIZATION, getToken(ADMIN_EMAIL, ADMIN_REGISTRATION_NUMBER)))
++				.andExpect(status().isOk()).andReturn();
++		Ride foundRide = mapper.readValue(result.getResponse().getContentAsByteArray(), Ride.class);
++		assertEquals(newRide, foundRide);
++		rideRepository.delete(newRide);
++	}
++
++	@Test
++	public void testGetRideByIdFail() throws Exception {
++		mockMvc.perform(get("/api/ride/8888").contentType(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION,
++				getToken(ADMIN_EMAIL, ADMIN_REGISTRATION_NUMBER))).andExpect(status().isNotFound());
++	}
++
++	@Test
++	public void testGetTopDriver() throws Exception {
++
++		MvcResult result = mockMvc
++				.perform(get("/api/top-rides").param("max", "10").param("startTime", "2018-09-01T08:00:00")
++						.param("endTime", "2018-09-06T15:00:00")
++						.header(HttpHeaders.AUTHORIZATION, getToken(EMAIL, REGISTRATION_NUMBER)))
++				.andExpect(status().isOk()).andReturn();
++		List<TopDriverDTO> topDrivers = mapper.readValue(result.getResponse().getContentAsByteArray(),
++				mapper.getTypeFactory().constructCollectionType(List.class, TopDriverDTO.class));
++		assertEquals(2, topDrivers.size());
++		TopDriverDTO first = topDrivers.get(0);
++		TopDriverDTO second = topDrivers.get(1);
++		assertEquals(EMAIL, first.getEmail());
++		assertEquals(ADMIN_EMAIL, second.getEmail());
++		assertEquals(first.getTotalRideDurationInSeconds(), Long.valueOf(21600));
++		assertEquals(first.getMaxRideDurationInSecods(), Long.valueOf(21600));
++		assertEquals(50.0, first.getAverageDistance(), 0.001);
++		assertEquals(second.getTotalRideDurationInSeconds(), Long.valueOf(9000));
++		assertEquals(second.getMaxRideDurationInSecods(), Long.valueOf(5400));
++		assertEquals(15.0, second.getAverageDistance(), 0.001);
++	}
++
++	private String getToken(String login, String password) throws Exception {
++		String bodyResponseAuthentication = mockMvc
++				.perform(post("/api/auth/signin").contentType(MediaType.APPLICATION_JSON).content(
++						mapper.createObjectNode().put("email", login).put("registrationNumber", password).toString()))
++				.andReturn().getResponse().getContentAsString();
++		JwtAuthenticationResponse response = mapper.readValue(bodyResponseAuthentication,
++				JwtAuthenticationResponse.class);
++
++		return "Bearer " + response.getAccessToken();
++	}
++
++	private Ride addRide(String startTime, String endTime, Long distance, Long riderId, String login, String password)
++			throws Exception {
++		MvcResult result = mockMvc
++				.perform(post("/api/ride").contentType(MediaType.APPLICATION_JSON)
++				.content(mapper.createObjectNode().put("startTime", startTime)
++				.put("endTime", endTime)
++				.put("distance", distance).put("riderId", riderId).toString())
++				.header(HttpHeaders.AUTHORIZATION, getToken(login, password)))
++				.andExpect(status().isCreated()).andReturn();
++		return mapper.readValue(result.getResponse().getContentAsByteArray(), Ride.class);
++	}
++}
+diff --git a/src/test/resources/application.properties b/src/test/resources/application.properties
+new file mode 100644
+index 0000000..364efd4
+--- /dev/null
++++ b/src/test/resources/application.properties
+@@ -0,0 +1,18 @@
++#PLEASE TRY NOT TO CHANGE SETTINGS AND USE APPROPRIATE ENV VARIABLES and DATABASE NAME AS CONFIGURED BELOW
++#Database connection Parameters
++spring.datasource.url=jdbc:h2:mem:crossride;DB_CLOSE_DELAY=-1
++#;DB_CLOSE_ON_EXIT=FALSE
++spring.datasource.driver-class-name=org.h2.Driver
++
++spring.jpa.hibernate.dialect=org.hibernate.dialect.H2Dialect
++spring.jpa.hibernate.ddl-auto=none
++
++spring.liquibase.change-log=classpath:/test-db/changelog/test-db.changelog-master.xml
++spring.data.rest.base-path=/api
++
++logging.level.root=INFO
++logging.level.org.hibernate.SQL=INFO
++logging.level.org.springframework=INFO
++
++app.jwtSecret=crossridesecret
++app.jwtExpirationInMs=604800000
+diff --git a/src/test/resources/test-db/changelog/test-db.changelog-1.0.xml b/src/test/resources/test-db/changelog/test-db.changelog-1.0.xml
+new file mode 100644
+index 0000000..6073c06
+--- /dev/null
++++ b/src/test/resources/test-db/changelog/test-db.changelog-1.0.xml
+@@ -0,0 +1,37 @@
++<?xml version="1.1" encoding="UTF-8" standalone="no"?>
++<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
++    <changeSet author="crossover" id="1001122001_create_tables">
++        <createTable tableName="person">
++            <column autoIncrement="true" name="id" type="BIGINT">
++                <constraints primaryKey="true" primaryKeyName="pk_person"/>
++            </column>
++            <column name="name" type="VARCHAR(255)"/>
++            <column name="email" type="VARCHAR(255)"/>
++            <column name="registration_number" type="VARCHAR(255)"/>
++        </createTable>
++        <createTable tableName="ride">
++            <column autoIncrement="true" name="id" type="BIGINT">
++                <constraints primaryKey="true" primaryKeyName="pk_ride"/>
++            </column>
++            <column name="driver_id" type="BIGINT"/>
++            <column name="rider_id" type="BIGINT"/>
++            <column name="start_time" type="VARCHAR(255)"/>
++            <column name="end_time" type="VARCHAR(255)"/>
++            <column name="distance" type="BIGINT"/>
++        </createTable>
++         <addForeignKeyConstraint baseColumnNames="driver_id"
++            baseTableName="ride"
++            constraintName="fk_address_person_driver"
++            onDelete="CASCADE"
++            onUpdate="RESTRICT"
++            referencedColumnNames="id"
++            referencedTableName="person"/>
++          <addForeignKeyConstraint baseColumnNames="rider_id"
++            baseTableName="ride"
++            constraintName="fk_address_person_rider"
++            onDelete="CASCADE"
++            onUpdate="RESTRICT"
++            referencedColumnNames="id"
++            referencedTableName="person"/>
++    </changeSet>
++</databaseChangeLog>
+diff --git a/src/test/resources/test-db/changelog/test-db.changelog-1.1.xml b/src/test/resources/test-db/changelog/test-db.changelog-1.1.xml
+new file mode 100644
+index 0000000..7c893ba
+--- /dev/null
++++ b/src/test/resources/test-db/changelog/test-db.changelog-1.1.xml
+@@ -0,0 +1,35 @@
++<?xml version="1.1" encoding="UTF-8" standalone="no"?>
++<databaseChangeLog
++	xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
++	xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
++	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++	xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
++	<changeSet author="juanValero" id="test updates 1">
++		<createTable tableName="role">
++			<column autoIncrement="true" name="id" type="BIGINT">
++				<constraints primaryKey="true" primaryKeyName="pk_role" />
++			</column>
++			<column name="role_name" type="VARCHAR(32)" />
++		</createTable>
++		<addUniqueConstraint tableName="person"
++			columnNames="email" />
++		<createTable tableName="person_role">
++			<column autoIncrement="true" name="id" type="BIGINT">
++				<constraints primaryKey="true"
++					primaryKeyName="pk_person_role" />
++			</column>
++			<column name="person_id" type="BIGINT" />
++			<column name="role_id" type="BIGINT" />
++		</createTable>
++		<addForeignKeyConstraint
++			baseColumnNames="person_id" baseTableName="person_role"
++			constraintName="fk_person_role_person" onDelete="CASCADE"
++			onUpdate="RESTRICT" referencedColumnNames="id"
++			referencedTableName="person" />
++		<addForeignKeyConstraint
++			baseColumnNames="role_id" baseTableName="person_role"
++			constraintName="fk_person_role_role" onDelete="CASCADE"
++			onUpdate="RESTRICT" referencedColumnNames="id"
++			referencedTableName="role" />
++	</changeSet>
++</databaseChangeLog>
+diff --git a/src/test/resources/test-db/changelog/test-db.changelog-data.xml b/src/test/resources/test-db/changelog/test-db.changelog-data.xml
+new file mode 100644
+index 0000000..0f0fe8e
+--- /dev/null
++++ b/src/test/resources/test-db/changelog/test-db.changelog-data.xml
+@@ -0,0 +1,75 @@
++<?xml version="1.1" encoding="UTF-8" standalone="no"?>
++<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
++    <changeSet id="data_import" author="juan valero">
++        <insert tableName="role">
++            <column name="id">1</column>
++            <column name="role_name">ROLE_ADMIN</column>
++        </insert>
++        <insert tableName="role">
++            <column name="id">2</column>
++            <column name="role_name">ROLE_PERSON</column>
++        </insert>
++        <insert tableName="person">
++            <column name="id">1</column>
++            <column name="name">juan valero</column>
++            <column name="email">juanvalero252@gmail.com</column>
++            <column name="registration_number">$2a$10$Trc283E3zDvzRU7j1Co2IOccQZD7rjxuAPF0bbmJM6VH33NYtwCwm</column><!-- 001 -->
++        </insert>
++        <insert tableName="person_role">
++            <column name="id">1</column>
++            <column name="person_id">1</column>
++            <column name="role_id">1</column>
++        </insert>
++        <insert tableName="person">
++            <column name="id">2</column>
++            <column name="name">James Bond</column>
++            <column name="email">bond@mail.com</column>
++            <column name="registration_number">$2a$10$UKsQkfFqu4wevHl5HzhlX.9RzaK/1k.Ahz9akglsAPZvUxrD8zIYC</column><!-- 007 -->
++        </insert>
++        <insert tableName="person_role">
++            <column name="id">2</column>
++            <column name="person_id">2</column>
++            <column name="role_id">2</column>
++        </insert>
++        <insert tableName="ride">
++            <column name="id">1</column>
++            <column name="start_time">2018-09-01T09:00:00</column>
++            <column name="end_time">2018-09-01T10:00:00</column>
++            <column name="distance">10</column>
++            <column name="driver_id">1</column>
++            <column name="rider_id">2</column>
++        </insert>
++        <insert tableName="ride">
++            <column name="id">2</column>
++            <column name="start_time">2018-09-01T13:00:00</column>
++            <column name="end_time">2018-09-01T14:30:00</column>
++            <column name="distance">20</column>
++            <column name="driver_id">1</column>
++            <column name="rider_id">2</column>
++        </insert>
++        <insert tableName="ride">
++            <column name="id">3</column>
++            <column name="start_time">2018-09-18T10:00:00</column>
++            <column name="end_time">2018-09-18T14:00:00</column>
++            <column name="distance">40</column>
++            <column name="driver_id">1</column>
++            <column name="rider_id">2</column>
++        </insert>
++        <insert tableName="ride">
++            <column name="id">4</column>
++            <column name="start_time">2018-09-05T09:00:00</column>
++            <column name="end_time">2018-09-05T15:00:00</column>
++            <column name="distance">50</column>
++            <column name="driver_id">2</column>
++            <column name="rider_id">1</column>
++        </insert>
++        <insert tableName="ride">
++            <column name="id">5</column>
++            <column name="start_time">2018-09-020T07:00:00</column>
++            <column name="end_time">2018-09-21T14:00:00</column>
++            <column name="distance">80</column>
++            <column name="driver_id">2</column>
++            <column name="rider_id">1</column>
++        </insert>
++    </changeSet>
++</databaseChangeLog>
+diff --git a/src/test/resources/test-db/changelog/test-db.changelog-master.xml b/src/test/resources/test-db/changelog/test-db.changelog-master.xml
+new file mode 100644
+index 0000000..73d9b57
+--- /dev/null
++++ b/src/test/resources/test-db/changelog/test-db.changelog-master.xml
+@@ -0,0 +1,9 @@
++<databaseChangeLog
++        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
++        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.4.xsd">
++
++    <include file="test-db/changelog/test-db.changelog-1.0.xml"/>
++    <include file="test-db/changelog/test-db.changelog-1.1.xml"/>
++    <include file="test-db/changelog/test-db.changelog-data.xml"/>
++</databaseChangeLog>
+\ No newline at end of file

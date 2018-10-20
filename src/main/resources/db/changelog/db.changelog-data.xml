@@ -1,0 +1,82 @@
+<?xml version="1.1" encoding="UTF-8" standalone="no"?>
+<databaseChangeLog
+	xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+	xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
+	<changeSet id="data_import" author="juan valero">
+		<insert tableName="role">
+			<column name="id">1</column>
+			<column name="role_name">ROLE_ADMIN</column>
+		</insert>
+		<insert tableName="role">
+			<column name="id">2</column>
+			<column name="role_name">ROLE_PERSON</column>
+		</insert>
+		<insert tableName="person">
+			<column name="id">1</column>
+			<column name="name">juan valero</column>
+			<column name="email">juanvalero252@gmail.com</column>
+			<column name="registration_number">$2a$10$Trc283E3zDvzRU7j1Co2IOccQZD7rjxuAPF0bbmJM6VH33NYtwCwm</column><!-- 001 -->
+		</insert>
+		<insert tableName="person">
+			<column name="id">2</column>
+			<column name="name">James Bond</column>
+			<column name="email">bond@mail.com</column>
+			<column name="registration_number">$2a$10$UKsQkfFqu4wevHl5HzhlX.9RzaK/1k.Ahz9akglsAPZvUxrD8zIYC</column><!-- 007 -->
+		</insert>
+
+		<insert tableName="ride">
+			<column name="id">1</column>
+			<column name="start_time">2018-10-01T09:00:00</column>
+			<column name="end_time">2018-10-01T10:00:00</column>
+			<column name="distance">50</column>
+			<column name="driver_id">1</column>
+			<column name="rider_id">2</column>
+		</insert>
+		<insert tableName="ride">
+			<column name="id">2</column>
+			<column name="start_time">2018-09-20T13:00:00</column>
+			<column name="end_time">2018-09-20T14:30:00</column>
+			<column name="distance">66</column>
+			<column name="driver_id">1</column>
+			<column name="rider_id">2</column>
+		</insert>
+		<insert tableName="ride">
+			<column name="id">3</column>
+			<column name="start_time">2018-10-11T10:00:00</column>
+			<column name="end_time">2018-10-11T14:00:00</column>
+			<column name="distance">40</column>
+			<column name="driver_id">1</column>
+			<column name="rider_id">2</column>
+		</insert>
+		<insert tableName="ride">
+			<column name="id">4</column>
+			<column name="start_time">2018-10-20T09:00:00</column>
+			<column name="end_time">2018-10-20T15:00:00</column>
+			<column name="distance">50</column>
+			<column name="driver_id">2</column>
+			<column name="rider_id">1</column>
+		</insert>
+		<insert tableName="ride">
+			<column name="id">5</column>
+			<column name="start_time">2018-09-20T07:00:00</column>
+			<column name="end_time">2018-09-21T14:00:00</column>
+			<column name="distance">84</column>
+			<column name="driver_id">2</column>
+			<column name="rider_id">1</column>
+		</insert>
+
+		<insert tableName="person_role">
+			<column name="id">2</column>
+			<column name="person_id">2</column>
+			<column name="role_id">2</column>
+		</insert>
+
+		<insert tableName="person_role">
+			<column name="id">1</column>
+			<column name="person_id">1</column>
+			<column name="role_id">1</column>
+		</insert>
+	</changeSet>
+</databaseChangeLog>

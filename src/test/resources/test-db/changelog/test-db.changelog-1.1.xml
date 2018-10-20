@@ -1,0 +1,35 @@
+<?xml version="1.1" encoding="UTF-8" standalone="no"?>
+<databaseChangeLog
+	xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+	xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd">
+	<changeSet author="juanValero" id="test updates 1">
+		<createTable tableName="role">
+			<column autoIncrement="true" name="id" type="BIGINT">
+				<constraints primaryKey="true" primaryKeyName="pk_role" />
+			</column>
+			<column name="role_name" type="VARCHAR(32)" />
+		</createTable>
+		<addUniqueConstraint tableName="person"
+			columnNames="email" />
+		<createTable tableName="person_role">
+			<column autoIncrement="true" name="id" type="BIGINT">
+				<constraints primaryKey="true"
+					primaryKeyName="pk_person_role" />
+			</column>
+			<column name="person_id" type="BIGINT" />
+			<column name="role_id" type="BIGINT" />
+		</createTable>
+		<addForeignKeyConstraint
+			baseColumnNames="person_id" baseTableName="person_role"
+			constraintName="fk_person_role_person" onDelete="CASCADE"
+			onUpdate="RESTRICT" referencedColumnNames="id"
+			referencedTableName="person" />
+		<addForeignKeyConstraint
+			baseColumnNames="role_id" baseTableName="person_role"
+			constraintName="fk_person_role_role" onDelete="CASCADE"
+			onUpdate="RESTRICT" referencedColumnNames="id"
+			referencedTableName="role" />
+	</changeSet>
+</databaseChangeLog>
